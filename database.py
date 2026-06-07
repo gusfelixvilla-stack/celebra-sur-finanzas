@@ -22,14 +22,19 @@ DB_PATH = Path(__file__).parent / "finanzas.db"
 
 def get_conn():
     if USE_POSTGRES:
-        import psycopg2
-        conn = psycopg2.connect(
-            DATABASE_URL,
-            sslmode="require",
-            connect_timeout=15,
-        )
-        conn.autocommit = False
-        return conn
+        try:
+            import psycopg2
+            conn = psycopg2.connect(
+                DATABASE_URL,
+                sslmode="require",
+                connect_timeout=10,
+            )
+            conn.autocommit = False
+            return conn
+        except Exception as e:
+            # Fallback silencioso a SQLite si PostgreSQL falla
+            pass
+
     conn = sqlite3.connect(DB_PATH, detect_types=sqlite3.PARSE_DECLTYPES)
     conn.row_factory = sqlite3.Row
     return conn
@@ -40,14 +45,19 @@ def get_conn():
 def _run(sql, params=None, fetch=False):
     conn = get_conn()
     try:
-        if USE_POSTGRES:
+        # Detectar si realmente es PostgreSQL (tiene cursor sin row_factory)
+        is_pg = not hasattr(conn, 'row_factory')
+
+        if is_pg:
             sql = sql.replace("?", "%s")
+
         cur = conn.cursor()
         cur.execute(sql, params or ())
         conn.commit()
+
         if fetch:
             rows = cur.fetchall()
-            if USE_POSTGRES:
+            if is_pg:
                 cols = [d[0] for d in cur.description]
                 return [dict(zip(cols, r)) for r in rows]
             return [dict(r) for r in rows]
@@ -60,7 +70,10 @@ def _run(sql, params=None, fetch=False):
 def init_db():
     conn = get_conn()
     try:
-        if USE_POSTGRES:
+        # Detectar si realmente es PostgreSQL
+        is_pg = not hasattr(conn, 'row_factory')
+
+        if is_pg:
             cur = conn.cursor()
             cur.execute("""
                 CREATE TABLE IF NOT EXISTS historial (
