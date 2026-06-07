@@ -1,151 +1,246 @@
+"""
+Capa de datos: usa Supabase (nube, persistente) si hay credenciales,
+o SQLite local como respaldo para desarrollo.
+"""
 import os
 import sqlite3
 from pathlib import Path
 
-# ── Detectar DATABASE_URL ─────────────────────────────────────────────────────
-DATABASE_URL = None
+# ── Detectar credenciales de Supabase ─────────────────────────────────────────
+SUPABASE_URL = None
+SUPABASE_KEY = None
 
 try:
     import streamlit as st
-    DATABASE_URL = str(st.secrets["DATABASE_URL"]) if "DATABASE_URL" in st.secrets else None
+    SUPABASE_URL = st.secrets.get("SUPABASE_URL", None)
+    SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", None)
 except Exception:
     pass
 
-if not DATABASE_URL:
-    DATABASE_URL = os.environ.get("DATABASE_URL")
+if not SUPABASE_URL:
+    SUPABASE_URL = os.environ.get("SUPABASE_URL")
+if not SUPABASE_KEY:
+    SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
 
-USE_POSTGRES = bool(DATABASE_URL)
+USE_SUPABASE = bool(SUPABASE_URL and SUPABASE_KEY)
+# Compatibilidad con código existente que importa USE_POSTGRES
+USE_POSTGRES = USE_SUPABASE
+
 DB_PATH = Path(__file__).parent / "finanzas.db"
 
+_sb_client = None
 
-# ── Conexión ──────────────────────────────────────────────────────────────────
+
+def _supabase():
+    """Cliente Supabase (singleton)."""
+    global _sb_client
+    if _sb_client is None:
+        from supabase import create_client
+        _sb_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+    return _sb_client
+
+
+# ── SQLite (respaldo local) ───────────────────────────────────────────────────
 
 def get_conn():
-    if USE_POSTGRES:
-        try:
-            import psycopg2
-            conn = psycopg2.connect(
-                DATABASE_URL,
-                sslmode="require",
-                connect_timeout=10,
-            )
-            conn.autocommit = False
-            return conn
-        except Exception as e:
-            # Fallback silencioso a SQLite si PostgreSQL falla
-            pass
-
     conn = sqlite3.connect(DB_PATH, detect_types=sqlite3.PARSE_DECLTYPES)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-# ── Helpers SQL (SQLite usa ?, Postgres usa %s) ───────────────────────────────
-
-def _run(sql, params=None, fetch=False):
-    conn = get_conn()
-    try:
-        # Detectar si realmente es PostgreSQL (tiene cursor sin row_factory)
-        is_pg = not hasattr(conn, 'row_factory')
-
-        if is_pg:
-            sql = sql.replace("?", "%s")
-
-        cur = conn.cursor()
-        cur.execute(sql, params or ())
-        conn.commit()
-
-        if fetch:
-            rows = cur.fetchall()
-            if is_pg:
-                cols = [d[0] for d in cur.description]
-                return [dict(zip(cols, r)) for r in rows]
-            return [dict(r) for r in rows]
-    finally:
-        conn.close()
-
-
 # ── Inicializar tablas ────────────────────────────────────────────────────────
 
 def init_db():
+    if USE_SUPABASE:
+        # Las tablas en Supabase se crean una sola vez desde el panel SQL.
+        return
     conn = get_conn()
     try:
-        # Detectar si realmente es PostgreSQL
-        is_pg = not hasattr(conn, 'row_factory')
-
-        if is_pg:
-            cur = conn.cursor()
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS historial (
-                    id SERIAL PRIMARY KEY,
-                    fecha TIMESTAMPTZ DEFAULT NOW(),
-                    usuario TEXT NOT NULL DEFAULT 'Anónimo',
-                    accion TEXT NOT NULL,
-                    modulo TEXT NOT NULL,
-                    detalle TEXT
-                )""")
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS eventos (
-                    id SERIAL PRIMARY KEY,
-                    fecha_evento TEXT NOT NULL,
-                    concepto TEXT NOT NULL,
-                    costo_total REAL NOT NULL,
-                    monto_apartado REAL NOT NULL DEFAULT 0,
-                    fecha_apartado TEXT,
-                    estatus TEXT NOT NULL DEFAULT 'Apartado',
-                    fecha_liquidacion TEXT,
-                    porcentaje_utilidad REAL NOT NULL DEFAULT 0,
-                    utilidad REAL NOT NULL DEFAULT 0,
-                    created_at TIMESTAMPTZ DEFAULT NOW()
-                )""")
-            cur.execute("""
-                CREATE TABLE IF NOT EXISTS rentas (
-                    id SERIAL PRIMARY KEY,
-                    propiedad TEXT NOT NULL,
-                    fecha_inicio TEXT,
-                    fecha_vencimiento TEXT NOT NULL,
-                    monto_renta REAL NOT NULL,
-                    fecha_ingreso_real TEXT,
-                    notas TEXT,
-                    created_at TIMESTAMPTZ DEFAULT NOW()
-                )""")
-            conn.commit()
-        else:
-            conn.executescript("""
-                CREATE TABLE IF NOT EXISTS historial (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    fecha TEXT DEFAULT (datetime('now','localtime')),
-                    usuario TEXT NOT NULL DEFAULT 'Anónimo',
-                    accion TEXT NOT NULL,
-                    modulo TEXT NOT NULL,
-                    detalle TEXT
-                );
-                CREATE TABLE IF NOT EXISTS eventos (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    fecha_evento TEXT NOT NULL,
-                    concepto TEXT NOT NULL,
-                    costo_total REAL NOT NULL,
-                    monto_apartado REAL NOT NULL DEFAULT 0,
-                    fecha_apartado TEXT,
-                    estatus TEXT NOT NULL DEFAULT 'Apartado',
-                    fecha_liquidacion TEXT,
-                    porcentaje_utilidad REAL NOT NULL DEFAULT 0,
-                    utilidad REAL NOT NULL DEFAULT 0,
-                    created_at TEXT DEFAULT (datetime('now','localtime'))
-                );
-                CREATE TABLE IF NOT EXISTS rentas (
-                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    propiedad TEXT NOT NULL,
-                    fecha_inicio TEXT,
-                    fecha_vencimiento TEXT NOT NULL,
-                    monto_renta REAL NOT NULL,
-                    fecha_ingreso_real TEXT,
-                    notas TEXT,
-                    created_at TEXT DEFAULT (datetime('now','localtime'))
-                );
-            """)
+        conn.executescript("""
+            CREATE TABLE IF NOT EXISTS historial (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fecha TEXT DEFAULT (datetime('now','localtime')),
+                usuario TEXT NOT NULL DEFAULT 'Anónimo',
+                accion TEXT NOT NULL,
+                modulo TEXT NOT NULL,
+                detalle TEXT
+            );
+            CREATE TABLE IF NOT EXISTS eventos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fecha_evento TEXT NOT NULL,
+                concepto TEXT NOT NULL,
+                costo_total REAL NOT NULL,
+                monto_apartado REAL NOT NULL DEFAULT 0,
+                fecha_apartado TEXT,
+                estatus TEXT NOT NULL DEFAULT 'Apartado',
+                fecha_liquidacion TEXT,
+                porcentaje_utilidad REAL NOT NULL DEFAULT 0,
+                utilidad REAL NOT NULL DEFAULT 0,
+                created_at TEXT DEFAULT (datetime('now','localtime'))
+            );
+            CREATE TABLE IF NOT EXISTS rentas (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                propiedad TEXT NOT NULL,
+                fecha_inicio TEXT,
+                fecha_vencimiento TEXT NOT NULL,
+                monto_renta REAL NOT NULL,
+                fecha_ingreso_real TEXT,
+                notas TEXT,
+                created_at TEXT DEFAULT (datetime('now','localtime'))
+            );
+        """)
     finally:
         conn.close()
+
+
+# ── API de datos (unifica Supabase y SQLite) ──────────────────────────────────
+
+def log_accion(usuario, accion, modulo, detalle=""):
+    if USE_SUPABASE:
+        _supabase().table("historial").insert({
+            "usuario": usuario, "accion": accion,
+            "modulo": modulo, "detalle": detalle,
+        }).execute()
+    else:
+        conn = get_conn()
+        try:
+            conn.execute(
+                "INSERT INTO historial (usuario,accion,modulo,detalle) VALUES (?,?,?,?)",
+                (usuario, accion, modulo, detalle))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def get_eventos():
+    if USE_SUPABASE:
+        r = _supabase().table("eventos").select("*").order("fecha_evento", desc=True).execute()
+        return r.data or []
+    conn = get_conn()
+    try:
+        return [dict(x) for x in conn.execute(
+            "SELECT * FROM eventos ORDER BY fecha_evento DESC").fetchall()]
+    finally:
+        conn.close()
+
+
+def get_rentas():
+    if USE_SUPABASE:
+        r = _supabase().table("rentas").select("*").order("fecha_vencimiento", desc=True).execute()
+        return r.data or []
+    conn = get_conn()
+    try:
+        return [dict(x) for x in conn.execute(
+            "SELECT * FROM rentas ORDER BY fecha_vencimiento DESC, propiedad").fetchall()]
+    finally:
+        conn.close()
+
+
+def get_historial():
+    if USE_SUPABASE:
+        r = _supabase().table("historial").select("*").order("id", desc=True).limit(200).execute()
+        return r.data or []
+    conn = get_conn()
+    try:
+        return [dict(x) for x in conn.execute(
+            "SELECT * FROM historial ORDER BY id DESC LIMIT 200").fetchall()]
+    finally:
+        conn.close()
+
+
+def save_evento(data: dict, evento_id=None):
+    payload = {
+        "fecha_evento": data["fecha_evento"],
+        "concepto": data["concepto"],
+        "costo_total": data["costo_total"],
+        "monto_apartado": data["monto_apartado"],
+        "fecha_apartado": data["fecha_apartado"],
+        "estatus": data["estatus"],
+        "fecha_liquidacion": data["fecha_liquidacion"],
+        "utilidad": data["utilidad"],
+    }
+    if USE_SUPABASE:
+        if evento_id:
+            _supabase().table("eventos").update(payload).eq("id", evento_id).execute()
+        else:
+            _supabase().table("eventos").insert(payload).execute()
+    else:
+        conn = get_conn()
+        try:
+            if evento_id:
+                conn.execute("""UPDATE eventos SET fecha_evento=?, concepto=?,
+                    costo_total=?, monto_apartado=?, fecha_apartado=?, estatus=?,
+                    fecha_liquidacion=?, utilidad=? WHERE id=?""",
+                    (payload["fecha_evento"], payload["concepto"], payload["costo_total"],
+                     payload["monto_apartado"], payload["fecha_apartado"], payload["estatus"],
+                     payload["fecha_liquidacion"], payload["utilidad"], evento_id))
+            else:
+                conn.execute("""INSERT INTO eventos (fecha_evento,concepto,costo_total,
+                    monto_apartado,fecha_apartado,estatus,fecha_liquidacion,utilidad)
+                    VALUES (?,?,?,?,?,?,?,?)""",
+                    (payload["fecha_evento"], payload["concepto"], payload["costo_total"],
+                     payload["monto_apartado"], payload["fecha_apartado"], payload["estatus"],
+                     payload["fecha_liquidacion"], payload["utilidad"]))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def delete_evento(evento_id):
+    if USE_SUPABASE:
+        _supabase().table("eventos").delete().eq("id", evento_id).execute()
+    else:
+        conn = get_conn()
+        try:
+            conn.execute("DELETE FROM eventos WHERE id=?", (evento_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def save_renta(data: dict, renta_id=None):
+    payload = {
+        "propiedad": data["propiedad"],
+        "fecha_inicio": data["fecha_inicio"],
+        "fecha_vencimiento": data["fecha_vencimiento"],
+        "monto_renta": data["monto_renta"],
+        "fecha_ingreso_real": data["fecha_ingreso_real"],
+        "notas": data["notas"],
+    }
+    if USE_SUPABASE:
+        if renta_id:
+            _supabase().table("rentas").update(payload).eq("id", renta_id).execute()
+        else:
+            _supabase().table("rentas").insert(payload).execute()
+    else:
+        conn = get_conn()
+        try:
+            if renta_id:
+                conn.execute("""UPDATE rentas SET propiedad=?, fecha_inicio=?,
+                    fecha_vencimiento=?, monto_renta=?, fecha_ingreso_real=?, notas=?
+                    WHERE id=?""",
+                    (payload["propiedad"], payload["fecha_inicio"], payload["fecha_vencimiento"],
+                     payload["monto_renta"], payload["fecha_ingreso_real"], payload["notas"], renta_id))
+            else:
+                conn.execute("""INSERT INTO rentas (propiedad,fecha_inicio,fecha_vencimiento,
+                    monto_renta,fecha_ingreso_real,notas) VALUES (?,?,?,?,?,?)""",
+                    (payload["propiedad"], payload["fecha_inicio"], payload["fecha_vencimiento"],
+                     payload["monto_renta"], payload["fecha_ingreso_real"], payload["notas"]))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def delete_renta(renta_id):
+    if USE_SUPABASE:
+        _supabase().table("rentas").delete().eq("id", renta_id).execute()
+    else:
+        conn = get_conn()
+        try:
+            conn.execute("DELETE FROM rentas WHERE id=?", (renta_id,))
+            conn.commit()
+        finally:
+            conn.close()
 
 
 init_db()
