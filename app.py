@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
-from database import get_conn, init_db
+from database import get_conn, init_db, USE_POSTGRES, _fetchall
 from contract import generar_contrato
 
 init_db()
@@ -154,64 +154,85 @@ def kpi(label, value, sub="", color="blue"):
 # Data layer
 # ══════════════════════════════════════════════════════════════════════════════
 
+def _run(sql, params=None, fetch=False):
+    """Ejecuta SQL en SQLite o PostgreSQL de forma transparente."""
+    conn = get_conn()
+    try:
+        if USE_POSTGRES:
+            sql_pg = sql.replace("?", "%s")
+            cur = conn.cursor()
+            cur.execute(sql_pg, params or ())
+            result = None
+            if fetch:
+                cols = [d[0] for d in cur.description]
+                result = [dict(zip(cols, row)) for row in cur.fetchall()]
+            conn.commit()
+            return result
+        else:
+            if params:
+                cur = conn.execute(sql, params)
+            else:
+                cur = conn.execute(sql)
+            conn.commit()
+            if fetch:
+                return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
 def log_accion(usuario, accion, modulo, detalle=""):
-    with get_conn() as c:
-        c.execute("INSERT INTO historial (usuario,accion,modulo,detalle) VALUES (?,?,?,?)",
-                  (usuario, accion, modulo, detalle))
+    _run("INSERT INTO historial (usuario,accion,modulo,detalle) VALUES (?,?,?,?)",
+         (usuario, accion, modulo, detalle))
 
 
 def get_eventos():
-    with get_conn() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM eventos ORDER BY fecha_evento DESC").fetchall()]
+    return _run("SELECT * FROM eventos ORDER BY fecha_evento DESC", fetch=True) or []
 
 
 def get_rentas():
-    with get_conn() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM rentas ORDER BY fecha_vencimiento DESC, propiedad").fetchall()]
+    return _run("SELECT * FROM rentas ORDER BY fecha_vencimiento DESC, propiedad", fetch=True) or []
 
 
 def get_historial():
-    with get_conn() as c:
-        return [dict(r) for r in c.execute("SELECT * FROM historial ORDER BY id DESC LIMIT 200").fetchall()]
+    return _run("SELECT * FROM historial ORDER BY id DESC LIMIT 200", fetch=True) or []
 
 
 def save_evento(data: dict, evento_id=None):
-    with get_conn() as c:
-        if evento_id:
-            c.execute("""UPDATE eventos SET fecha_evento=:fecha_evento, concepto=:concepto,
-                costo_total=:costo_total, monto_apartado=:monto_apartado,
-                fecha_apartado=:fecha_apartado, estatus=:estatus,
-                fecha_liquidacion=:fecha_liquidacion, utilidad=:utilidad
-                WHERE id=:id""", {**data, "id": evento_id})
-        else:
-            c.execute("""INSERT INTO eventos (fecha_evento,concepto,costo_total,monto_apartado,
-                fecha_apartado,estatus,fecha_liquidacion,utilidad)
-                VALUES (:fecha_evento,:concepto,:costo_total,:monto_apartado,
-                :fecha_apartado,:estatus,:fecha_liquidacion,:utilidad)""", data)
+    if evento_id:
+        _run("""UPDATE eventos SET fecha_evento=?, concepto=?,
+            costo_total=?, monto_apartado=?, fecha_apartado=?, estatus=?,
+            fecha_liquidacion=?, utilidad=? WHERE id=?""",
+            (data["fecha_evento"], data["concepto"], data["costo_total"],
+             data["monto_apartado"], data["fecha_apartado"], data["estatus"],
+             data["fecha_liquidacion"], data["utilidad"], evento_id))
+    else:
+        _run("""INSERT INTO eventos (fecha_evento,concepto,costo_total,monto_apartado,
+            fecha_apartado,estatus,fecha_liquidacion,utilidad)
+            VALUES (?,?,?,?,?,?,?,?)""",
+            (data["fecha_evento"], data["concepto"], data["costo_total"],
+             data["monto_apartado"], data["fecha_apartado"], data["estatus"],
+             data["fecha_liquidacion"], data["utilidad"]))
 
 
 def delete_evento(evento_id):
-    with get_conn() as c:
-        c.execute("DELETE FROM eventos WHERE id=?", (evento_id,))
+    _run("DELETE FROM eventos WHERE id=?", (evento_id,))
 
 
 def save_renta(data: dict, renta_id=None):
-    with get_conn() as c:
-        if renta_id:
-            c.execute("""UPDATE rentas SET propiedad=:propiedad,
-                fecha_inicio=:fecha_inicio, fecha_vencimiento=:fecha_vencimiento,
-                monto_renta=:monto_renta, fecha_ingreso_real=:fecha_ingreso_real, notas=:notas
-                WHERE id=:id""", {**data, "id": renta_id})
-        else:
-            c.execute("""INSERT INTO rentas
-                (propiedad,fecha_inicio,fecha_vencimiento,monto_renta,fecha_ingreso_real,notas)
-                VALUES (:propiedad,:fecha_inicio,:fecha_vencimiento,:monto_renta,:fecha_ingreso_real,:notas)""",
-                data)
+    if renta_id:
+        _run("""UPDATE rentas SET propiedad=?, fecha_inicio=?, fecha_vencimiento=?,
+            monto_renta=?, fecha_ingreso_real=?, notas=? WHERE id=?""",
+            (data["propiedad"], data["fecha_inicio"], data["fecha_vencimiento"],
+             data["monto_renta"], data["fecha_ingreso_real"], data["notas"], renta_id))
+    else:
+        _run("""INSERT INTO rentas (propiedad,fecha_inicio,fecha_vencimiento,
+            monto_renta,fecha_ingreso_real,notas) VALUES (?,?,?,?,?,?)""",
+            (data["propiedad"], data["fecha_inicio"], data["fecha_vencimiento"],
+             data["monto_renta"], data["fecha_ingreso_real"], data["notas"]))
 
 
 def delete_renta(renta_id):
-    with get_conn() as c:
-        c.execute("DELETE FROM rentas WHERE id=?", (renta_id,))
+    _run("DELETE FROM rentas WHERE id=?", (renta_id,))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
