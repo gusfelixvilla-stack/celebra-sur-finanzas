@@ -25,8 +25,12 @@ DB_PATH = Path(__file__).parent / "finanzas.db"
 def get_conn():
     if USE_POSTGRES:
         import psycopg2
-        import psycopg2.extras
-        conn = psycopg2.connect(DATABASE_URL)
+        # Agregar sslmode=require para Supabase
+        url = DATABASE_URL
+        if "sslmode" not in url:
+            sep = "&" if "?" in url else "?"
+            url = url + sep + "sslmode=require"
+        conn = psycopg2.connect(url)
         conn.autocommit = False
         return conn
     else:

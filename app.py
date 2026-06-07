@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import date, timedelta
-from database import get_conn, init_db, USE_POSTGRES, _fetchall
+from database import get_conn, init_db, USE_POSTGRES
 from contract import generar_contrato
 
 init_db()
