@@ -5,6 +5,8 @@ from database import (
     init_db, USE_SUPABASE,
     log_accion, get_eventos, get_rentas, get_historial,
     save_evento, delete_evento, save_renta, delete_renta,
+    get_autos, save_auto, delete_auto,
+    get_facturaciones, save_facturacion, delete_facturacion,
 )
 from contract import generar_contrato
 
@@ -356,8 +358,8 @@ def ingresos_del_dia(dia: date):
 # ══════════════════════════════════════════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════════════════════════════════════════
-tab_dash, tab_eventos, tab_rentas, tab_hist = st.tabs(
-    ["📊 Dashboard", "🎉 Eventos", "🏠 Rentas", "📋 Historial"]
+tab_dash, tab_eventos, tab_rentas, tab_autos, tab_fact, tab_hist = st.tabs(
+    ["📊 Dashboard", "🎉 Eventos", "🏠 Rentas", "🚗 Autos", "🧾 Facturaciones", "📋 Historial"]
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -937,7 +939,189 @@ with tab_rentas:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TAB 4 — HISTORIAL  (fondo amarillo claro)
+# TAB 4 — AUTOS
+# ─────────────────────────────────────────────────────────────────────────────
+with tab_autos:
+    st.markdown('<div class="bg-rentas">', unsafe_allow_html=True)
+    st.markdown("## 🚗 Utilidad por Venta de Autos")
+
+    # ── Formulario ────────────────────────────────────────────────────────────
+    with st.expander("➕ Registrar / Editar Venta", expanded=False):
+        autos_lista = get_autos()
+        opciones_a = ["Nueva Venta"] + [
+            f"#{a['id']} – {a['unidad']} ({a['fecha']})"
+            for a in autos_lista
+        ]
+        sel_a = st.selectbox("Seleccionar registro", opciones_a, key="a_sel")
+        auto_id = None
+        a = {}
+        if sel_a != "Nueva Venta":
+            auto_id = int(sel_a.split("–")[0].replace("#", "").strip())
+            a = next((x for x in autos_lista if x["id"] == auto_id), {})
+
+        col1, col2 = st.columns(2)
+        with col1:
+            fecha_a = st.date_input("Fecha de venta", value=date.fromisoformat(a["fecha"]) if a.get("fecha") else date.today(), key="a_fecha")
+            unidad = st.text_input("Unidad (ej. Toyota Corolla 2020)", value=a.get("unidad", ""), key="a_unidad")
+            tipo_auto = st.radio("Tipo", ["Propio", "Consignación"], index=0 if a.get("tipo","Propio")=="Propio" else 1, horizontal=True, key="a_tipo")
+        with col2:
+            costo_a = st.number_input("Costo de la unidad ($)", min_value=0.0, value=float(a.get("costo", 0)), step=500.0, key="a_costo")
+            utilidad_a = st.number_input("Utilidad ($)", min_value=0.0, value=float(a.get("utilidad", 0)), step=100.0, key="a_util")
+            notas_a = st.text_input("Notas", value=a.get("notas") or "", key="a_notas")
+
+        st.markdown(f"**Precio de venta estimado:** {fmt_mxn(costo_a + utilidad_a)}")
+
+        ca1, ca2 = st.columns(2)
+        with ca1:
+            if st.button("💾 Guardar Venta", use_container_width=True, key="a_save"):
+                payload_a = {
+                    "fecha": fecha_a.isoformat(),
+                    "unidad": unidad,
+                    "costo": costo_a,
+                    "utilidad": utilidad_a,
+                    "tipo": tipo_auto,
+                    "notas": notas_a or None,
+                }
+                save_auto(payload_a, auto_id)
+                log_accion(usuario_activo, "Editó auto" if auto_id else "Registró auto", "Autos",
+                           f"{unidad} {tipo_auto} — Utilidad: {fmt_mxn(utilidad_a)}")
+                st.success("Guardado ✓")
+                st.rerun()
+        with ca2:
+            if auto_id and st.button("🗑️ Eliminar", use_container_width=True, key="a_del"):
+                delete_auto(auto_id)
+                log_accion(usuario_activo, "Eliminó auto", "Autos", f"#{auto_id} {a.get('unidad')}")
+                st.warning("Eliminado.")
+                st.rerun()
+
+    # ── Tabla ─────────────────────────────────────────────────────────────────
+    autos = get_autos()
+    if autos:
+        total_util = sum(a["utilidad"] for a in autos)
+        total_ventas = len(autos)
+        propios = sum(1 for a in autos if a["tipo"] == "Propio")
+        consig = sum(1 for a in autos if a["tipo"] == "Consignación")
+
+        k1, k2, k3, k4 = st.columns(4)
+        with k1: kpi("Unidades vendidas", str(total_ventas), "Total", "blue")
+        with k2: kpi("Utilidad total", fmt_mxn(total_util), "Ganancia neta", "green")
+        with k3: kpi("Propios", str(propios), "Vehículos propios", "purple")
+        with k4: kpi("Consignación", str(consig), "Por consignar", "orange")
+
+        st.markdown("#### Registro de ventas")
+        df_a = pd.DataFrame([{
+            "Fecha": a["fecha"],
+            "Unidad": a["unidad"],
+            "Tipo": a["tipo"],
+            "Costo": fmt_mxn(a["costo"]),
+            "Utilidad": fmt_mxn(a["utilidad"]),
+            "Notas": a.get("notas") or "—",
+        } for a in autos])
+
+        def color_tipo(val):
+            return "color:#166534" if val == "Propio" else "color:#92400e"
+
+        st.dataframe(
+            df_a.style.map(color_tipo, subset=["Tipo"]),
+            use_container_width=True, hide_index=True
+        )
+    else:
+        st.info("No hay ventas registradas aún.")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 5 — FACTURACIONES
+# ─────────────────────────────────────────────────────────────────────────────
+with tab_fact:
+    st.markdown('<div class="bg-eventos">', unsafe_allow_html=True)
+    st.markdown("## 🧾 Facturaciones")
+
+    # ── Formulario ────────────────────────────────────────────────────────────
+    with st.expander("➕ Registrar / Editar Facturación", expanded=False):
+        facts_lista = get_facturaciones()
+        opciones_f = ["Nueva Facturación"] + [
+            f"#{f['id']} – {f['cliente']} ({f['tipo']}) {f['fecha']}"
+            for f in facts_lista
+        ]
+        sel_f = st.selectbox("Seleccionar registro", opciones_f, key="f_sel")
+        fact_id = None
+        fac = {}
+        if sel_f != "Nueva Facturación":
+            fact_id = int(sel_f.split("–")[0].replace("#", "").strip())
+            fac = next((x for x in facts_lista if x["id"] == fact_id), {})
+
+        col1, col2 = st.columns(2)
+        with col1:
+            fecha_f = st.date_input("Fecha", value=date.fromisoformat(fac["fecha"]) if fac.get("fecha") else date.today(), key="f_fecha")
+            cliente_f = st.text_input("Cliente", value=fac.get("cliente", ""), key="f_cliente")
+            unidad_f = st.text_input("Unidad / Descripción", value=fac.get("unidad") or "", key="f_unidad")
+        with col2:
+            tipo_f = st.selectbox("Tipo de facturación", ["Crédito", "Placas", "Impuestos"],
+                index=["Crédito", "Placas", "Impuestos"].index(fac["tipo"]) if fac.get("tipo") in ["Crédito", "Placas", "Impuestos"] else 0,
+                key="f_tipo")
+            monto_f = st.number_input("Monto ($)", min_value=0.0, value=float(fac.get("monto", 0)), step=100.0, key="f_monto")
+            notas_f = st.text_input("Notas", value=fac.get("notas") or "", key="f_notas")
+
+        cf1, cf2 = st.columns(2)
+        with cf1:
+            if st.button("💾 Guardar Facturación", use_container_width=True, key="f_save"):
+                payload_f = {
+                    "fecha": fecha_f.isoformat(),
+                    "cliente": cliente_f,
+                    "unidad": unidad_f or None,
+                    "tipo": tipo_f,
+                    "monto": monto_f,
+                    "notas": notas_f or None,
+                }
+                save_facturacion(payload_f, fact_id)
+                log_accion(usuario_activo, "Editó facturación" if fact_id else "Registró facturación", "Facturaciones",
+                           f"{cliente_f} — {tipo_f} — {fmt_mxn(monto_f)}")
+                st.success("Guardado ✓")
+                st.rerun()
+        with cf2:
+            if fact_id and st.button("🗑️ Eliminar", use_container_width=True, key="f_del"):
+                delete_facturacion(fact_id)
+                log_accion(usuario_activo, "Eliminó facturación", "Facturaciones", f"#{fact_id} {fac.get('cliente')}")
+                st.warning("Eliminado.")
+                st.rerun()
+
+    # ── Tabla ─────────────────────────────────────────────────────────────────
+    facts = get_facturaciones()
+    if facts:
+        total_f = sum(f["monto"] for f in facts)
+        creditos = sum(f["monto"] for f in facts if f["tipo"] == "Crédito")
+        placas   = sum(f["monto"] for f in facts if f["tipo"] == "Placas")
+        imptos   = sum(f["monto"] for f in facts if f["tipo"] == "Impuestos")
+
+        k1, k2, k3, k4 = st.columns(4)
+        with k1: kpi("Total facturado", fmt_mxn(total_f), f"{len(facts)} facturas", "green")
+        with k2: kpi("Crédito", fmt_mxn(creditos), f"{sum(1 for f in facts if f['tipo']=='Crédito')} facturas", "blue")
+        with k3: kpi("Placas", fmt_mxn(placas), f"{sum(1 for f in facts if f['tipo']=='Placas')} facturas", "purple")
+        with k4: kpi("Impuestos", fmt_mxn(imptos), f"{sum(1 for f in facts if f['tipo']=='Impuestos')} facturas", "orange")
+
+        st.markdown("#### Registro de facturaciones")
+        TIPO_COLOR = {"Crédito": "color:#1e40af", "Placas": "color:#6b21a8", "Impuestos": "color:#92400e"}
+        df_f = pd.DataFrame([{
+            "Fecha": f["fecha"],
+            "Cliente": f["cliente"],
+            "Unidad": f.get("unidad") or "—",
+            "Tipo": f["tipo"],
+            "Monto": fmt_mxn(f["monto"]),
+            "Notas": f.get("notas") or "—",
+        } for f in facts])
+
+        st.dataframe(
+            df_f.style.map(lambda v: TIPO_COLOR.get(v, ""), subset=["Tipo"]),
+            use_container_width=True, hide_index=True
+        )
+    else:
+        st.info("No hay facturaciones registradas aún.")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 6 — HISTORIAL  (fondo amarillo claro)
 # ─────────────────────────────────────────────────────────────────────────────
 with tab_hist:
     st.markdown('<div class="bg-hist">', unsafe_allow_html=True)
@@ -952,7 +1136,7 @@ with tab_hist:
         # Filtros rápidos
         fc1, fc2 = st.columns(2)
         with fc1:
-            mod_fil = st.multiselect("Filtrar por módulo", ["Eventos", "Rentas"], default=["Eventos", "Rentas"])
+            mod_fil = st.multiselect("Filtrar por módulo", ["Eventos", "Rentas", "Autos", "Facturaciones"], default=["Eventos", "Rentas", "Autos", "Facturaciones"])
         with fc2:
             usr_fil = st.text_input("Filtrar por usuario", placeholder="Escribe un nombre...")
 

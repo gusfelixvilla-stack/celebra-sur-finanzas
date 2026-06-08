@@ -250,4 +250,120 @@ def delete_renta(renta_id):
             conn.close()
 
 
+# ── Autos ─────────────────────────────────────────────────────────────────────
+
+def get_autos():
+    if _use_supabase():
+        r = _supabase().table("autos").select("*").order("fecha", desc=True).execute()
+        return r.data or []
+    conn = get_conn()
+    try:
+        return [dict(x) for x in conn.execute(
+            "SELECT * FROM autos ORDER BY fecha DESC").fetchall()]
+    finally:
+        conn.close()
+
+
+def save_auto(data: dict, auto_id=None):
+    payload = {
+        "fecha": data["fecha"],
+        "unidad": data["unidad"],
+        "costo": data["costo"],
+        "utilidad": data["utilidad"],
+        "tipo": data["tipo"],
+        "notas": data.get("notas"),
+    }
+    if _use_supabase():
+        if auto_id:
+            _supabase().table("autos").update(payload).eq("id", auto_id).execute()
+        else:
+            _supabase().table("autos").insert(payload).execute()
+    else:
+        conn = get_conn()
+        try:
+            if auto_id:
+                conn.execute("""UPDATE autos SET fecha=?, unidad=?, costo=?,
+                    utilidad=?, tipo=?, notas=? WHERE id=?""",
+                    (payload["fecha"], payload["unidad"], payload["costo"],
+                     payload["utilidad"], payload["tipo"], payload["notas"], auto_id))
+            else:
+                conn.execute("""INSERT INTO autos (fecha,unidad,costo,utilidad,tipo,notas)
+                    VALUES (?,?,?,?,?,?)""",
+                    (payload["fecha"], payload["unidad"], payload["costo"],
+                     payload["utilidad"], payload["tipo"], payload["notas"]))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def delete_auto(auto_id):
+    if _use_supabase():
+        _supabase().table("autos").delete().eq("id", auto_id).execute()
+    else:
+        conn = get_conn()
+        try:
+            conn.execute("DELETE FROM autos WHERE id=?", (auto_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+# ── Facturaciones ─────────────────────────────────────────────────────────────
+
+def get_facturaciones():
+    if _use_supabase():
+        r = _supabase().table("facturaciones").select("*").order("fecha", desc=True).execute()
+        return r.data or []
+    conn = get_conn()
+    try:
+        return [dict(x) for x in conn.execute(
+            "SELECT * FROM facturaciones ORDER BY fecha DESC").fetchall()]
+    finally:
+        conn.close()
+
+
+def save_facturacion(data: dict, fact_id=None):
+    payload = {
+        "fecha": data["fecha"],
+        "cliente": data["cliente"],
+        "unidad": data.get("unidad"),
+        "tipo": data["tipo"],
+        "monto": data["monto"],
+        "notas": data.get("notas"),
+    }
+    if _use_supabase():
+        if fact_id:
+            _supabase().table("facturaciones").update(payload).eq("id", fact_id).execute()
+        else:
+            _supabase().table("facturaciones").insert(payload).execute()
+    else:
+        conn = get_conn()
+        try:
+            if fact_id:
+                conn.execute("""UPDATE facturaciones SET fecha=?, cliente=?, unidad=?,
+                    tipo=?, monto=?, notas=? WHERE id=?""",
+                    (payload["fecha"], payload["cliente"], payload["unidad"],
+                     payload["tipo"], payload["monto"], payload["notas"], fact_id))
+            else:
+                conn.execute("""INSERT INTO facturaciones (fecha,cliente,unidad,tipo,monto,notas)
+                    VALUES (?,?,?,?,?,?)""",
+                    (payload["fecha"], payload["cliente"], payload["unidad"],
+                     payload["tipo"], payload["monto"], payload["notas"]))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def delete_facturacion(fact_id):
+    if _use_supabase():
+        _supabase().table("facturaciones").delete().eq("id", fact_id).execute()
+    else:
+        conn = get_conn()
+        try:
+            conn.execute("DELETE FROM facturaciones WHERE id=?", (fact_id,))
+            conn.commit()
+        finally:
+            conn.close()
+
+
 init_db()
