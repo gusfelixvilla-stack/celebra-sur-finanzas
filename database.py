@@ -6,27 +6,26 @@ import os
 import sqlite3
 from pathlib import Path
 
-# ── Detectar credenciales de Supabase ─────────────────────────────────────────
-SUPABASE_URL = None
-SUPABASE_KEY = None
-
-try:
-    import streamlit as st
-    SUPABASE_URL = st.secrets.get("SUPABASE_URL", None)
-    SUPABASE_KEY = st.secrets.get("SUPABASE_KEY", None)
-except Exception:
-    pass
-
-if not SUPABASE_URL:
-    SUPABASE_URL = os.environ.get("SUPABASE_URL")
-if not SUPABASE_KEY:
-    SUPABASE_KEY = os.environ.get("SUPABASE_KEY")
-
-USE_SUPABASE = bool(SUPABASE_URL and SUPABASE_KEY)
-# Compatibilidad con código existente que importa USE_POSTGRES
-USE_POSTGRES = USE_SUPABASE
-
 DB_PATH = Path(__file__).parent / "finanzas.db"
+
+# Compatibilidad
+USE_POSTGRES = False
+USE_SUPABASE = False
+
+
+def _get_supabase_creds():
+    """Lee credenciales de Supabase en tiempo de ejecución."""
+    url = os.environ.get("SUPABASE_URL")
+    key = os.environ.get("SUPABASE_KEY")
+    if not url or not key:
+        try:
+            import streamlit as st
+            url = str(st.secrets["SUPABASE_URL"]) if "SUPABASE_URL" in st.secrets else url
+            key = str(st.secrets["SUPABASE_KEY"]) if "SUPABASE_KEY" in st.secrets else key
+        except Exception:
+            pass
+    return url, key
+
 
 _sb_client = None
 
@@ -36,8 +35,15 @@ def _supabase():
     global _sb_client
     if _sb_client is None:
         from supabase import create_client
-        _sb_client = create_client(SUPABASE_URL, SUPABASE_KEY)
+        url, key = _get_supabase_creds()
+        _sb_client = create_client(url, key)
     return _sb_client
+
+
+def _use_supabase():
+    """¿Tenemos credenciales de Supabase?"""
+    url, key = _get_supabase_creds()
+    return bool(url and key)
 
 
 # ── SQLite (respaldo local) ───────────────────────────────────────────────────
@@ -48,11 +54,12 @@ def get_conn():
     return conn
 
 
-# ── Inicializar tablas ────────────────────────────────────────────────────────
+# ── Inicializar tablas SQLite ─────────────────────────────────────────────────
 
 def init_db():
-    if USE_SUPABASE:
-        # Las tablas en Supabase se crean una sola vez desde el panel SQL.
+    # En Supabase las tablas se crean desde el SQL Editor
+    # Solo inicializamos SQLite para desarrollo local
+    if _use_supabase():
         return
     conn = get_conn()
     try:
@@ -93,10 +100,10 @@ def init_db():
         conn.close()
 
 
-# ── API de datos (unifica Supabase y SQLite) ──────────────────────────────────
+# ── API de datos ──────────────────────────────────────────────────────────────
 
 def log_accion(usuario, accion, modulo, detalle=""):
-    if USE_SUPABASE:
+    if _use_supabase():
         _supabase().table("historial").insert({
             "usuario": usuario, "accion": accion,
             "modulo": modulo, "detalle": detalle,
@@ -113,7 +120,7 @@ def log_accion(usuario, accion, modulo, detalle=""):
 
 
 def get_eventos():
-    if USE_SUPABASE:
+    if _use_supabase():
         r = _supabase().table("eventos").select("*").order("fecha_evento", desc=True).execute()
         return r.data or []
     conn = get_conn()
@@ -125,7 +132,7 @@ def get_eventos():
 
 
 def get_rentas():
-    if USE_SUPABASE:
+    if _use_supabase():
         r = _supabase().table("rentas").select("*").order("fecha_vencimiento", desc=True).execute()
         return r.data or []
     conn = get_conn()
@@ -137,7 +144,7 @@ def get_rentas():
 
 
 def get_historial():
-    if USE_SUPABASE:
+    if _use_supabase():
         r = _supabase().table("historial").select("*").order("id", desc=True).limit(200).execute()
         return r.data or []
     conn = get_conn()
@@ -159,7 +166,7 @@ def save_evento(data: dict, evento_id=None):
         "fecha_liquidacion": data["fecha_liquidacion"],
         "utilidad": data["utilidad"],
     }
-    if USE_SUPABASE:
+    if _use_supabase():
         if evento_id:
             _supabase().table("eventos").update(payload).eq("id", evento_id).execute()
         else:
@@ -187,7 +194,7 @@ def save_evento(data: dict, evento_id=None):
 
 
 def delete_evento(evento_id):
-    if USE_SUPABASE:
+    if _use_supabase():
         _supabase().table("eventos").delete().eq("id", evento_id).execute()
     else:
         conn = get_conn()
@@ -207,7 +214,7 @@ def save_renta(data: dict, renta_id=None):
         "fecha_ingreso_real": data["fecha_ingreso_real"],
         "notas": data["notas"],
     }
-    if USE_SUPABASE:
+    if _use_supabase():
         if renta_id:
             _supabase().table("rentas").update(payload).eq("id", renta_id).execute()
         else:
@@ -232,7 +239,7 @@ def save_renta(data: dict, renta_id=None):
 
 
 def delete_renta(renta_id):
-    if USE_SUPABASE:
+    if _use_supabase():
         _supabase().table("rentas").delete().eq("id", renta_id).execute()
     else:
         conn = get_conn()
