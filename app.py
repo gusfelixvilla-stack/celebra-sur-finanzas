@@ -536,37 +536,27 @@ with tab_dash:
     # ── Botón descargar Excel ─────────────────────────────────────────────────
     st.markdown("---")
     st.markdown("### 📥 Descargar respaldo")
-    if st.button("📥 Descargar todo en Excel", use_container_width=False):
-        import io
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-            # Eventos
-            ev_df = pd.DataFrame(get_eventos())
-            if not ev_df.empty:
-                ev_df.to_excel(writer, sheet_name="Eventos", index=False)
-            # Rentas
-            rent_df = pd.DataFrame(get_rentas())
-            if not rent_df.empty:
-                rent_df.to_excel(writer, sheet_name="Rentas", index=False)
-            # Autos
-            autos_df = pd.DataFrame(get_autos())
-            if not autos_df.empty:
-                autos_df.to_excel(writer, sheet_name="Autos", index=False)
-            # Facturaciones
-            facts_df = pd.DataFrame(get_facturaciones())
-            if not facts_df.empty:
-                facts_df.to_excel(writer, sheet_name="Facturaciones", index=False)
-            # Historial
-            hist_df = pd.DataFrame(get_historial())
-            if not hist_df.empty:
-                hist_df.to_excel(writer, sheet_name="Historial", index=False)
-        buffer.seek(0)
-        st.download_button(
-            label="⬇️ Clic aquí para bajar el archivo",
-            data=buffer,
-            file_name=f"celebrasur_{date.today().isoformat()}.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        )
+    import io
+    buffer = io.BytesIO()
+    tablas = {
+        "Eventos": get_eventos(),
+        "Rentas": get_rentas(),
+        "Autos": get_autos(),
+        "Facturaciones": get_facturaciones(),
+        "Historial": get_historial(),
+    }
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        for nombre, datos in tablas.items():
+            df = pd.DataFrame(datos) if datos else pd.DataFrame(["Sin datos"], columns=["Info"])
+            df.to_excel(writer, sheet_name=nombre, index=False)
+    buffer.seek(0)
+    st.download_button(
+        label="📥 Descargar todo en Excel",
+        data=buffer,
+        file_name=f"celebrasur_{date.today().isoformat()}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=False,
+    )
 
     # ── Resumen Mensual ───────────────────────────────────────────────────────
     st.markdown("---")
