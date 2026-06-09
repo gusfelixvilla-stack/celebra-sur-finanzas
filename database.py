@@ -366,4 +366,60 @@ def delete_facturacion(fact_id):
             conn.close()
 
 
+# ── Cierres Mensuales ─────────────────────────────────────────────────────────
+
+def get_cierres():
+    if _use_supabase():
+        r = _supabase().table("cierres_mensuales").select("*").order("anio_mes", desc=True).execute()
+        return r.data or []
+    conn = get_conn()
+    try:
+        return [dict(x) for x in conn.execute(
+            "SELECT * FROM cierres_mensuales ORDER BY anio_mes DESC").fetchall()]
+    finally:
+        conn.close()
+
+
+def save_cierre(data: dict):
+    """Guarda o reemplaza el cierre de un mes (upsert por anio_mes)."""
+    payload = {
+        "anio_mes":      data["anio_mes"],        # "2026-05"
+        "eventos":       data.get("eventos", 0),
+        "rentas":        data.get("rentas", 0),
+        "autos":         data.get("autos", 0),
+        "facturaciones": data.get("facturaciones", 0),
+        "notas":         data.get("notas"),
+    }
+    if _use_supabase():
+        # upsert: si ya existe ese mes lo actualiza
+        _supabase().table("cierres_mensuales").upsert(payload, on_conflict="anio_mes").execute()
+    else:
+        conn = get_conn()
+        try:
+            conn.execute("""INSERT INTO cierres_mensuales
+                (anio_mes,eventos,rentas,autos,facturaciones,notas)
+                VALUES (?,?,?,?,?,?)
+                ON CONFLICT(anio_mes) DO UPDATE SET
+                eventos=excluded.eventos, rentas=excluded.rentas,
+                autos=excluded.autos, facturaciones=excluded.facturaciones,
+                notas=excluded.notas""",
+                (payload["anio_mes"], payload["eventos"], payload["rentas"],
+                 payload["autos"], payload["facturaciones"], payload["notas"]))
+            conn.commit()
+        finally:
+            conn.close()
+
+
+def delete_cierre(anio_mes: str):
+    if _use_supabase():
+        _supabase().table("cierres_mensuales").delete().eq("anio_mes", anio_mes).execute()
+    else:
+        conn = get_conn()
+        try:
+            conn.execute("DELETE FROM cierres_mensuales WHERE anio_mes=?", (anio_mes,))
+            conn.commit()
+        finally:
+            conn.close()
+
+
 init_db()

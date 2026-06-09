@@ -7,6 +7,7 @@ from database import (
     save_evento, delete_evento, save_renta, delete_renta,
     get_autos, save_auto, delete_auto,
     get_facturaciones, save_facturacion, delete_facturacion,
+    get_cierres, save_cierre, delete_cierre,
 )
 from contract import generar_contrato
 
@@ -531,6 +532,136 @@ with tab_dash:
         t, te, tr, ta, tf, _, _, _, _ = ingresos_del_dia(d)
         resumen.append({"Fecha": d.strftime("%d/%m"), "Eventos": te, "Rentas": tr, "Autos": ta, "Facturaciones": tf})
     st.bar_chart(pd.DataFrame(resumen).set_index("Fecha"))
+
+    # ── Resumen Mensual ───────────────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 📆 Resumen Mensual")
+
+    hoy_mes = date.today()
+    mes_actual_str = hoy_mes.strftime("%Y-%m")
+    MESES_NOMBRES = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]
+
+    # Calcular mes actual en tiempo real desde transacciones
+    def _total_mes_actual():
+        mes = hoy_mes.strftime("%Y-%m")
+        ev = sum(
+            (e["monto_apartado"] or 0) + ((e["costo_total"] - e["monto_apartado"])
+            if e["estatus"] == "Liquidado" else 0)
+            for e in get_eventos()
+            if (e.get("fecha_apartado") or "")[:7] == mes or
+               (e.get("fecha_liquidacion") or "")[:7] == mes
+        )
+        rent = sum(r["monto_renta"] for r in get_rentas()
+                   if (r.get("fecha_ingreso_real") or "")[:7] == mes)
+        autos_m = sum(a["utilidad"] for a in get_autos()
+                      if (a.get("fecha") or "")[:7] == mes)
+        facts_m = sum(f["monto"] for f in get_facturaciones()
+                      if (f.get("fecha") or "")[:7] == mes)
+        return {"eventos": ev, "rentas": rent, "autos": autos_m, "facturaciones": facts_m}
+
+    mes_act = _total_mes_actual()
+    total_mes_act = sum(mes_act.values())
+
+    # KPIs del mes actual
+    st.markdown(f"#### 📅 {MESES_NOMBRES[hoy_mes.month-1]} {hoy_mes.year} — Mes actual (en curso)")
+    ma1, ma2, ma3, ma4, ma5 = st.columns(5)
+    with ma1: kpi("Total del mes", fmt_mxn(total_mes_act), "Acumulado", "green")
+    with ma2: kpi("Eventos", fmt_mxn(mes_act["eventos"]), "", "blue")
+    with ma3: kpi("Rentas", fmt_mxn(mes_act["rentas"]), "", "purple")
+    with ma4: kpi("Autos", fmt_mxn(mes_act["autos"]), "", "orange")
+    with ma5: kpi("Facturaciones", fmt_mxn(mes_act["facturaciones"]), "", "blue")
+
+    st.markdown("---")
+
+    # ── Capturar cierre de mes anterior ──────────────────────────────────────
+    st.markdown("#### 📥 Capturar mes anterior")
+    cierres = get_cierres()
+    cierres_dict = {c["anio_mes"]: c for c in cierres}
+
+    with st.expander("➕ Registrar / Editar mes anterior", expanded=False):
+        # Selector de mes (últimos 24 meses excepto el actual)
+        opciones_mes = []
+        for i in range(1, 25):
+            d_mes = date(hoy_mes.year, hoy_mes.month, 1) - timedelta(days=i*28)
+            ym = d_mes.strftime("%Y-%m")
+            label = f"{MESES_NOMBRES[d_mes.month-1]} {d_mes.year}"
+            if ym not in opciones_mes:
+                opciones_mes.append((ym, label))
+        # deduplicar
+        seen = set(); opciones_mes_uniq = []
+        for ym, label in opciones_mes:
+            if ym not in seen:
+                seen.add(ym); opciones_mes_uniq.append((ym, label))
+
+        mes_labels = [f"{label} ({ym})" for ym, label in opciones_mes_uniq]
+        sel_mes_idx = st.selectbox("Mes a registrar", range(len(mes_labels)),
+                                    format_func=lambda i: mes_labels[i], key="cierre_mes_sel")
+        ym_sel, _ = opciones_mes_uniq[sel_mes_idx]
+        existente = cierres_dict.get(ym_sel, {})
+
+        cm1, cm2 = st.columns(2)
+        with cm1:
+            ev_c   = st.number_input("Eventos ($)", min_value=0.0, value=float(existente.get("eventos",0)), step=100.0, key="c_ev")
+            rent_c = st.number_input("Rentas ($)", min_value=0.0, value=float(existente.get("rentas",0)), step=100.0, key="c_rent")
+        with cm2:
+            autos_c = st.number_input("Autos — Utilidad ($)", min_value=0.0, value=float(existente.get("autos",0)), step=100.0, key="c_autos")
+            facts_c = st.number_input("Facturaciones ($)", min_value=0.0, value=float(existente.get("facturaciones",0)), step=100.0, key="c_facts")
+        notas_c = st.text_input("Notas del mes", value=existente.get("notas") or "", key="c_notas")
+
+        total_c = ev_c + rent_c + autos_c + facts_c
+        st.markdown(f"**Total del mes: {fmt_mxn(total_c)}**")
+
+        cc1, cc2 = st.columns(2)
+        with cc1:
+            if st.button("💾 Guardar cierre", use_container_width=True, key="c_save"):
+                save_cierre({"anio_mes": ym_sel, "eventos": ev_c, "rentas": rent_c,
+                             "autos": autos_c, "facturaciones": facts_c, "notas": notas_c or None})
+                log_accion(usuario_activo, "Guardó cierre mensual", "Dashboard", f"{ym_sel} — {fmt_mxn(total_c)}")
+                st.success("Guardado ✓")
+                st.rerun()
+        with cc2:
+            if ym_sel in cierres_dict and st.button("🗑️ Eliminar", use_container_width=True, key="c_del"):
+                delete_cierre(ym_sel)
+                st.warning("Eliminado.")
+                st.rerun()
+
+    # ── Gráfica comparativa de meses ─────────────────────────────────────────
+    st.markdown("#### 📊 Comparativa mensual (últimos 12 meses + actual)")
+    datos_grafica = []
+    for ym, label in reversed(opciones_mes_uniq[:11]):
+        c = cierres_dict.get(ym, {})
+        datos_grafica.append({
+            "Mes": label,
+            "Eventos": c.get("eventos", 0),
+            "Rentas": c.get("rentas", 0),
+            "Autos": c.get("autos", 0),
+            "Facturaciones": c.get("facturaciones", 0),
+        })
+    # Agregar mes actual al final
+    datos_grafica.append({
+        "Mes": f"{MESES_NOMBRES[hoy_mes.month-1]} {hoy_mes.year} ★",
+        "Eventos": mes_act["eventos"],
+        "Rentas": mes_act["rentas"],
+        "Autos": mes_act["autos"],
+        "Facturaciones": mes_act["facturaciones"],
+    })
+    df_graf = pd.DataFrame(datos_grafica).set_index("Mes")
+    st.bar_chart(df_graf)
+
+    # Tabla resumen
+    if cierres:
+        st.markdown("#### 📋 Historial de cierres")
+        df_cierres = pd.DataFrame([{
+            "Mes": f"{MESES_NOMBRES[int(c['anio_mes'].split('-')[1])-1]} {c['anio_mes'].split('-')[0]}",
+            "Eventos": fmt_mxn(c.get("eventos",0)),
+            "Rentas": fmt_mxn(c.get("rentas",0)),
+            "Autos": fmt_mxn(c.get("autos",0)),
+            "Facturaciones": fmt_mxn(c.get("facturaciones",0)),
+            "Total": fmt_mxn(sum([c.get("eventos",0), c.get("rentas",0), c.get("autos",0), c.get("facturaciones",0)])),
+            "Notas": c.get("notas") or "—",
+        } for c in cierres])
+        st.dataframe(df_cierres, use_container_width=True, hide_index=True)
+
     st.markdown('</div>', unsafe_allow_html=True)
 
 
