@@ -331,8 +331,8 @@ def render_calendario_renta(anio: int, mes: int, rangos_ocupados: list, propieda
 
 def ingresos_del_dia(dia: date):
     dia_str = dia.strftime("%Y-%m-%d")
-    detalle_eventos, detalle_rentas = [], []
-    total_eventos = total_rentas = 0
+    detalle_eventos, detalle_rentas, detalle_autos, detalle_facts = [], [], [], []
+    total_eventos = total_rentas = total_autos = total_facts = 0
 
     for e in get_eventos():
         aporte, desc = 0, []
@@ -352,7 +352,18 @@ def ingresos_del_dia(dia: date):
             total_rentas += r["monto_renta"]
             detalle_rentas.append({"Propiedad": r["propiedad"], "Vencimiento": r["fecha_vencimiento"], "Monto": r["monto_renta"]})
 
-    return total_eventos + total_rentas, total_eventos, total_rentas, detalle_eventos, detalle_rentas
+    for a in get_autos():
+        if a["fecha"] == dia_str:
+            total_autos += a["utilidad"]
+            detalle_autos.append({"Unidad": a["unidad"], "Tipo": a["tipo"], "Utilidad": a["utilidad"]})
+
+    for f in get_facturaciones():
+        if f["fecha"] == dia_str:
+            total_facts += f["monto"]
+            detalle_facts.append({"Cliente": f["cliente"], "Tipo": f["tipo"], "Monto": f["monto"]})
+
+    total = total_eventos + total_rentas + total_autos + total_facts
+    return total, total_eventos, total_rentas, total_autos, total_facts, detalle_eventos, detalle_rentas, detalle_autos, detalle_facts
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -371,6 +382,8 @@ with tab_dash:
     # ── KPIs globales siempre visibles ────────────────────────────────────────
     todos_ev   = get_eventos()
     todas_rent = get_rentas()
+    todos_autos = get_autos()
+    todas_facts = get_facturaciones()
 
     total_pactado  = sum(e["costo_total"] for e in todos_ev)
     total_cobrado  = sum(
@@ -378,21 +391,19 @@ with tab_dash:
         if e["estatus"] == "Liquidado" else 0)
         for e in todos_ev
     )
-    total_pendiente_ev = total_pactado - total_cobrado
-    total_util = sum(e.get("utilidad", 0) for e in todos_ev)
-
-    rent_cobradas  = sum(r["monto_renta"] for r in todas_rent if r["fecha_ingreso_real"])
-    rent_pendiente = sum(
-        r["monto_renta"] for r in todas_rent
-        if not r["fecha_ingreso_real"]
-    )
+    total_util_ev = sum(e.get("utilidad", 0) for e in todos_ev)
+    rent_cobradas = sum(r["monto_renta"] for r in todas_rent if r["fecha_ingreso_real"])
+    util_autos    = sum(a["utilidad"] for a in todos_autos)
+    total_facts_monto = sum(f["monto"] for f in todas_facts)
 
     st.markdown("### 📊 Resumen General")
-    g1, g2, g3, g4 = st.columns(4)
+    g1, g2, g3, g4, g5, g6 = st.columns(6)
     with g1: kpi("Eventos pactados", fmt_mxn(total_pactado), f"{len(todos_ev)} eventos", "blue")
     with g2: kpi("Cobrado eventos", fmt_mxn(total_cobrado), "Apartados + liquidados", "green")
     with g3: kpi("Rentas cobradas", fmt_mxn(rent_cobradas), f"{sum(1 for r in todas_rent if r['fecha_ingreso_real'])} pagos", "purple")
-    with g4: kpi("Utilidades totales", fmt_mxn(total_util), "Ganancia neta eventos", "orange")
+    with g4: kpi("Utilidades eventos", fmt_mxn(total_util_ev), "Ganancia neta", "orange")
+    with g5: kpi("Utilidad autos", fmt_mxn(util_autos), f"{len(todos_autos)} ventas", "green")
+    with g6: kpi("Facturaciones", fmt_mxn(total_facts_monto), f"{len(todas_facts)} facturas", "blue")
 
     st.markdown("---")
 
@@ -465,12 +476,14 @@ with tab_dash:
     with col_f:
         dia_sel = st.date_input("Día", value=date.today(), key="dash_fecha", label_visibility="collapsed")
 
-    total, tot_ev, tot_rent, det_ev, det_rent = ingresos_del_dia(dia_sel)
+    total, tot_ev, tot_rent, tot_autos, tot_facts, det_ev, det_rent, det_autos, det_facts = ingresos_del_dia(dia_sel)
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4, c5 = st.columns(5)
     with c1: kpi("Total del día", fmt_mxn(total), dia_sel.strftime("%d/%m/%Y"), "green")
-    with c2: kpi("De eventos", fmt_mxn(tot_ev), f"{len(det_ev)} movimiento(s)", "blue")
-    with c3: kpi("De rentas", fmt_mxn(tot_rent), f"{len(det_rent)} propiedad(es)", "purple")
+    with c2: kpi("Eventos", fmt_mxn(tot_ev), f"{len(det_ev)} mov.", "blue")
+    with c3: kpi("Rentas", fmt_mxn(tot_rent), f"{len(det_rent)} prop.", "purple")
+    with c4: kpi("Autos", fmt_mxn(tot_autos), f"{len(det_autos)} ventas", "orange")
+    with c5: kpi("Facturaciones", fmt_mxn(tot_facts), f"{len(det_facts)} fact.", "blue")
 
     if det_ev:
         st.markdown("##### Desglose Eventos")
@@ -480,7 +493,15 @@ with tab_dash:
         st.markdown("##### Desglose Rentas")
         df = pd.DataFrame(det_rent); df["Monto"] = df["Monto"].apply(fmt_mxn)
         st.dataframe(df, use_container_width=True, hide_index=True)
-    if not det_ev and not det_rent:
+    if det_autos:
+        st.markdown("##### Desglose Autos")
+        df = pd.DataFrame(det_autos); df["Utilidad"] = df["Utilidad"].apply(fmt_mxn)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    if det_facts:
+        st.markdown("##### Desglose Facturaciones")
+        df = pd.DataFrame(det_facts); df["Monto"] = df["Monto"].apply(fmt_mxn)
+        st.dataframe(df, use_container_width=True, hide_index=True)
+    if not det_ev and not det_rent and not det_autos and not det_facts:
         st.info("Sin ingresos en esa fecha.")
 
     st.markdown("---")
@@ -488,8 +509,8 @@ with tab_dash:
     resumen = []
     for i in range(6, -1, -1):
         d = date.today() - timedelta(days=i)
-        t, te, tr, _, _ = ingresos_del_dia(d)
-        resumen.append({"Fecha": d.strftime("%d/%m"), "Eventos": te, "Rentas": tr})
+        t, te, tr, ta, tf, _, _, _, _ = ingresos_del_dia(d)
+        resumen.append({"Fecha": d.strftime("%d/%m"), "Eventos": te, "Rentas": tr, "Autos": ta, "Facturaciones": tf})
     st.bar_chart(pd.DataFrame(resumen).set_index("Fecha"))
     st.markdown('</div>', unsafe_allow_html=True)
 
