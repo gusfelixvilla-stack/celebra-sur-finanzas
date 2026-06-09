@@ -27,23 +27,85 @@ def _get_supabase_creds():
     return url, key
 
 
-_sb_client = None
-
-
-def _supabase():
-    """Cliente Supabase (singleton)."""
-    global _sb_client
-    if _sb_client is None:
-        from supabase import create_client
-        url, key = _get_supabase_creds()
-        _sb_client = create_client(url, key)
-    return _sb_client
-
-
 def _use_supabase():
     """¿Tenemos credenciales de Supabase?"""
     url, key = _get_supabase_creds()
     return bool(url and key)
+
+
+def _sb_get(table, order=None, limit=None):
+    """SELECT * via REST API de Supabase."""
+    import requests
+    url, key = _get_supabase_creds()
+    endpoint = f"{url}/rest/v1/{table}?select=*"
+    if order:
+        endpoint += f"&order={order}"
+    if limit:
+        endpoint += f"&limit={limit}"
+    headers = {"apikey": key, "Authorization": f"Bearer {key}"}
+    r = requests.get(endpoint, headers=headers, timeout=10)
+    r.raise_for_status()
+    return r.json()
+
+
+def _sb_insert(table, payload):
+    """INSERT via REST API de Supabase."""
+    import requests
+    url, key = _get_supabase_creds()
+    headers = {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal",
+    }
+    r = requests.post(f"{url}/rest/v1/{table}", json=payload, headers=headers, timeout=10)
+    r.raise_for_status()
+
+
+def _sb_update(table, payload, match_col, match_val):
+    """UPDATE via REST API de Supabase."""
+    import requests
+    url, key = _get_supabase_creds()
+    headers = {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Prefer": "return=minimal",
+    }
+    r = requests.patch(
+        f"{url}/rest/v1/{table}?{match_col}=eq.{match_val}",
+        json=payload, headers=headers, timeout=10
+    )
+    r.raise_for_status()
+
+
+def _sb_delete(table, match_col, match_val):
+    """DELETE via REST API de Supabase."""
+    import requests
+    url, key = _get_supabase_creds()
+    headers = {"apikey": key, "Authorization": f"Bearer {key}"}
+    r = requests.delete(
+        f"{url}/rest/v1/{table}?{match_col}=eq.{match_val}",
+        headers=headers, timeout=10
+    )
+    r.raise_for_status()
+
+
+def _sb_upsert(table, payload, on_conflict):
+    """UPSERT via REST API de Supabase."""
+    import requests
+    url, key = _get_supabase_creds()
+    headers = {
+        "apikey": key,
+        "Authorization": f"Bearer {key}",
+        "Content-Type": "application/json",
+        "Prefer": f"resolution=merge-duplicates,return=minimal",
+    }
+    r = requests.post(
+        f"{url}/rest/v1/{table}?on_conflict={on_conflict}",
+        json=payload, headers=headers, timeout=10
+    )
+    r.raise_for_status()
 
 
 # ── SQLite (respaldo local) ───────────────────────────────────────────────────
@@ -104,15 +166,11 @@ def init_db():
 
 def log_accion(usuario, accion, modulo, detalle=""):
     if _use_supabase():
-        _supabase().table("historial").insert({
-            "usuario": usuario, "accion": accion,
-            "modulo": modulo, "detalle": detalle,
-        }).execute()
+        _sb_insert("historial", {"usuario": usuario, "accion": accion, "modulo": modulo, "detalle": detalle})
     else:
         conn = get_conn()
         try:
-            conn.execute(
-                "INSERT INTO historial (usuario,accion,modulo,detalle) VALUES (?,?,?,?)",
+            conn.execute("INSERT INTO historial (usuario,accion,modulo,detalle) VALUES (?,?,?,?)",
                 (usuario, accion, modulo, detalle))
             conn.commit()
         finally:
@@ -121,73 +179,50 @@ def log_accion(usuario, accion, modulo, detalle=""):
 
 def get_eventos():
     if _use_supabase():
-        r = _supabase().table("eventos").select("*").order("fecha_evento", desc=True).execute()
-        return r.data or []
+        return _sb_get("eventos", order="fecha_evento.desc") or []
     conn = get_conn()
     try:
-        return [dict(x) for x in conn.execute(
-            "SELECT * FROM eventos ORDER BY fecha_evento DESC").fetchall()]
+        return [dict(x) for x in conn.execute("SELECT * FROM eventos ORDER BY fecha_evento DESC").fetchall()]
     finally:
         conn.close()
 
 
 def get_rentas():
     if _use_supabase():
-        r = _supabase().table("rentas").select("*").order("fecha_vencimiento", desc=True).execute()
-        return r.data or []
+        return _sb_get("rentas", order="fecha_vencimiento.desc") or []
     conn = get_conn()
     try:
-        return [dict(x) for x in conn.execute(
-            "SELECT * FROM rentas ORDER BY fecha_vencimiento DESC, propiedad").fetchall()]
+        return [dict(x) for x in conn.execute("SELECT * FROM rentas ORDER BY fecha_vencimiento DESC, propiedad").fetchall()]
     finally:
         conn.close()
 
 
 def get_historial():
     if _use_supabase():
-        r = _supabase().table("historial").select("*").order("id", desc=True).limit(200).execute()
-        return r.data or []
+        return _sb_get("historial", order="id.desc", limit=200) or []
     conn = get_conn()
     try:
-        return [dict(x) for x in conn.execute(
-            "SELECT * FROM historial ORDER BY id DESC LIMIT 200").fetchall()]
+        return [dict(x) for x in conn.execute("SELECT * FROM historial ORDER BY id DESC LIMIT 200").fetchall()]
     finally:
         conn.close()
 
 
 def save_evento(data: dict, evento_id=None):
-    payload = {
-        "fecha_evento": data["fecha_evento"],
-        "concepto": data["concepto"],
-        "costo_total": data["costo_total"],
-        "monto_apartado": data["monto_apartado"],
-        "fecha_apartado": data["fecha_apartado"],
-        "estatus": data["estatus"],
-        "fecha_liquidacion": data["fecha_liquidacion"],
-        "utilidad": data["utilidad"],
-    }
+    payload = {k: data[k] for k in ["fecha_evento","concepto","costo_total","monto_apartado","fecha_apartado","estatus","fecha_liquidacion","utilidad"]}
     if _use_supabase():
         if evento_id:
-            _supabase().table("eventos").update(payload).eq("id", evento_id).execute()
+            _sb_update("eventos", payload, "id", evento_id)
         else:
-            _supabase().table("eventos").insert(payload).execute()
+            _sb_insert("eventos", payload)
     else:
         conn = get_conn()
         try:
             if evento_id:
-                conn.execute("""UPDATE eventos SET fecha_evento=?, concepto=?,
-                    costo_total=?, monto_apartado=?, fecha_apartado=?, estatus=?,
-                    fecha_liquidacion=?, utilidad=? WHERE id=?""",
-                    (payload["fecha_evento"], payload["concepto"], payload["costo_total"],
-                     payload["monto_apartado"], payload["fecha_apartado"], payload["estatus"],
-                     payload["fecha_liquidacion"], payload["utilidad"], evento_id))
+                conn.execute("""UPDATE eventos SET fecha_evento=?,concepto=?,costo_total=?,monto_apartado=?,fecha_apartado=?,estatus=?,fecha_liquidacion=?,utilidad=? WHERE id=?""",
+                    (*payload.values(), evento_id))
             else:
-                conn.execute("""INSERT INTO eventos (fecha_evento,concepto,costo_total,
-                    monto_apartado,fecha_apartado,estatus,fecha_liquidacion,utilidad)
-                    VALUES (?,?,?,?,?,?,?,?)""",
-                    (payload["fecha_evento"], payload["concepto"], payload["costo_total"],
-                     payload["monto_apartado"], payload["fecha_apartado"], payload["estatus"],
-                     payload["fecha_liquidacion"], payload["utilidad"]))
+                conn.execute("""INSERT INTO eventos (fecha_evento,concepto,costo_total,monto_apartado,fecha_apartado,estatus,fecha_liquidacion,utilidad) VALUES (?,?,?,?,?,?,?,?)""",
+                    tuple(payload.values()))
             conn.commit()
         finally:
             conn.close()
@@ -195,44 +230,31 @@ def save_evento(data: dict, evento_id=None):
 
 def delete_evento(evento_id):
     if _use_supabase():
-        _supabase().table("eventos").delete().eq("id", evento_id).execute()
+        _sb_delete("eventos", "id", evento_id)
     else:
         conn = get_conn()
         try:
-            conn.execute("DELETE FROM eventos WHERE id=?", (evento_id,))
-            conn.commit()
+            conn.execute("DELETE FROM eventos WHERE id=?", (evento_id,)); conn.commit()
         finally:
             conn.close()
 
 
 def save_renta(data: dict, renta_id=None):
-    payload = {
-        "propiedad": data["propiedad"],
-        "fecha_inicio": data["fecha_inicio"],
-        "fecha_vencimiento": data["fecha_vencimiento"],
-        "monto_renta": data["monto_renta"],
-        "fecha_ingreso_real": data["fecha_ingreso_real"],
-        "notas": data["notas"],
-    }
+    payload = {k: data[k] for k in ["propiedad","fecha_inicio","fecha_vencimiento","monto_renta","fecha_ingreso_real","notas"]}
     if _use_supabase():
         if renta_id:
-            _supabase().table("rentas").update(payload).eq("id", renta_id).execute()
+            _sb_update("rentas", payload, "id", renta_id)
         else:
-            _supabase().table("rentas").insert(payload).execute()
+            _sb_insert("rentas", payload)
     else:
         conn = get_conn()
         try:
             if renta_id:
-                conn.execute("""UPDATE rentas SET propiedad=?, fecha_inicio=?,
-                    fecha_vencimiento=?, monto_renta=?, fecha_ingreso_real=?, notas=?
-                    WHERE id=?""",
-                    (payload["propiedad"], payload["fecha_inicio"], payload["fecha_vencimiento"],
-                     payload["monto_renta"], payload["fecha_ingreso_real"], payload["notas"], renta_id))
+                conn.execute("""UPDATE rentas SET propiedad=?,fecha_inicio=?,fecha_vencimiento=?,monto_renta=?,fecha_ingreso_real=?,notas=? WHERE id=?""",
+                    (*payload.values(), renta_id))
             else:
-                conn.execute("""INSERT INTO rentas (propiedad,fecha_inicio,fecha_vencimiento,
-                    monto_renta,fecha_ingreso_real,notas) VALUES (?,?,?,?,?,?)""",
-                    (payload["propiedad"], payload["fecha_inicio"], payload["fecha_vencimiento"],
-                     payload["monto_renta"], payload["fecha_ingreso_real"], payload["notas"]))
+                conn.execute("""INSERT INTO rentas (propiedad,fecha_inicio,fecha_vencimiento,monto_renta,fecha_ingreso_real,notas) VALUES (?,?,?,?,?,?)""",
+                    tuple(payload.values()))
             conn.commit()
         finally:
             conn.close()
@@ -240,12 +262,11 @@ def save_renta(data: dict, renta_id=None):
 
 def delete_renta(renta_id):
     if _use_supabase():
-        _supabase().table("rentas").delete().eq("id", renta_id).execute()
+        _sb_delete("rentas", "id", renta_id)
     else:
         conn = get_conn()
         try:
-            conn.execute("DELETE FROM rentas WHERE id=?", (renta_id,))
-            conn.commit()
+            conn.execute("DELETE FROM rentas WHERE id=?", (renta_id,)); conn.commit()
         finally:
             conn.close()
 
@@ -254,43 +275,30 @@ def delete_renta(renta_id):
 
 def get_autos():
     if _use_supabase():
-        r = _supabase().table("autos").select("*").order("fecha", desc=True).execute()
-        return r.data or []
+        return _sb_get("autos", order="fecha.desc") or []
     conn = get_conn()
     try:
-        return [dict(x) for x in conn.execute(
-            "SELECT * FROM autos ORDER BY fecha DESC").fetchall()]
+        return [dict(x) for x in conn.execute("SELECT * FROM autos ORDER BY fecha DESC").fetchall()]
     finally:
         conn.close()
 
 
 def save_auto(data: dict, auto_id=None):
-    payload = {
-        "fecha": data["fecha"],
-        "unidad": data["unidad"],
-        "costo": data["costo"],
-        "utilidad": data["utilidad"],
-        "tipo": data["tipo"],
-        "notas": data.get("notas"),
-    }
+    payload = {k: data.get(k) for k in ["fecha","unidad","costo","utilidad","tipo","notas"]}
     if _use_supabase():
         if auto_id:
-            _supabase().table("autos").update(payload).eq("id", auto_id).execute()
+            _sb_update("autos", payload, "id", auto_id)
         else:
-            _supabase().table("autos").insert(payload).execute()
+            _sb_insert("autos", payload)
     else:
         conn = get_conn()
         try:
             if auto_id:
-                conn.execute("""UPDATE autos SET fecha=?, unidad=?, costo=?,
-                    utilidad=?, tipo=?, notas=? WHERE id=?""",
-                    (payload["fecha"], payload["unidad"], payload["costo"],
-                     payload["utilidad"], payload["tipo"], payload["notas"], auto_id))
+                conn.execute("UPDATE autos SET fecha=?,unidad=?,costo=?,utilidad=?,tipo=?,notas=? WHERE id=?",
+                    (*payload.values(), auto_id))
             else:
-                conn.execute("""INSERT INTO autos (fecha,unidad,costo,utilidad,tipo,notas)
-                    VALUES (?,?,?,?,?,?)""",
-                    (payload["fecha"], payload["unidad"], payload["costo"],
-                     payload["utilidad"], payload["tipo"], payload["notas"]))
+                conn.execute("INSERT INTO autos (fecha,unidad,costo,utilidad,tipo,notas) VALUES (?,?,?,?,?,?)",
+                    tuple(payload.values()))
             conn.commit()
         finally:
             conn.close()
@@ -298,12 +306,11 @@ def save_auto(data: dict, auto_id=None):
 
 def delete_auto(auto_id):
     if _use_supabase():
-        _supabase().table("autos").delete().eq("id", auto_id).execute()
+        _sb_delete("autos", "id", auto_id)
     else:
         conn = get_conn()
         try:
-            conn.execute("DELETE FROM autos WHERE id=?", (auto_id,))
-            conn.commit()
+            conn.execute("DELETE FROM autos WHERE id=?", (auto_id,)); conn.commit()
         finally:
             conn.close()
 
@@ -312,43 +319,30 @@ def delete_auto(auto_id):
 
 def get_facturaciones():
     if _use_supabase():
-        r = _supabase().table("facturaciones").select("*").order("fecha", desc=True).execute()
-        return r.data or []
+        return _sb_get("facturaciones", order="fecha.desc") or []
     conn = get_conn()
     try:
-        return [dict(x) for x in conn.execute(
-            "SELECT * FROM facturaciones ORDER BY fecha DESC").fetchall()]
+        return [dict(x) for x in conn.execute("SELECT * FROM facturaciones ORDER BY fecha DESC").fetchall()]
     finally:
         conn.close()
 
 
 def save_facturacion(data: dict, fact_id=None):
-    payload = {
-        "fecha": data["fecha"],
-        "cliente": data["cliente"],
-        "unidad": data.get("unidad"),
-        "tipo": data["tipo"],
-        "monto": data["monto"],
-        "notas": data.get("notas"),
-    }
+    payload = {k: data.get(k) for k in ["fecha","cliente","unidad","tipo","monto","notas"]}
     if _use_supabase():
         if fact_id:
-            _supabase().table("facturaciones").update(payload).eq("id", fact_id).execute()
+            _sb_update("facturaciones", payload, "id", fact_id)
         else:
-            _supabase().table("facturaciones").insert(payload).execute()
+            _sb_insert("facturaciones", payload)
     else:
         conn = get_conn()
         try:
             if fact_id:
-                conn.execute("""UPDATE facturaciones SET fecha=?, cliente=?, unidad=?,
-                    tipo=?, monto=?, notas=? WHERE id=?""",
-                    (payload["fecha"], payload["cliente"], payload["unidad"],
-                     payload["tipo"], payload["monto"], payload["notas"], fact_id))
+                conn.execute("UPDATE facturaciones SET fecha=?,cliente=?,unidad=?,tipo=?,monto=?,notas=? WHERE id=?",
+                    (*payload.values(), fact_id))
             else:
-                conn.execute("""INSERT INTO facturaciones (fecha,cliente,unidad,tipo,monto,notas)
-                    VALUES (?,?,?,?,?,?)""",
-                    (payload["fecha"], payload["cliente"], payload["unidad"],
-                     payload["tipo"], payload["monto"], payload["notas"]))
+                conn.execute("INSERT INTO facturaciones (fecha,cliente,unidad,tipo,monto,notas) VALUES (?,?,?,?,?,?)",
+                    tuple(payload.values()))
             conn.commit()
         finally:
             conn.close()
@@ -356,12 +350,11 @@ def save_facturacion(data: dict, fact_id=None):
 
 def delete_facturacion(fact_id):
     if _use_supabase():
-        _supabase().table("facturaciones").delete().eq("id", fact_id).execute()
+        _sb_delete("facturaciones", "id", fact_id)
     else:
         conn = get_conn()
         try:
-            conn.execute("DELETE FROM facturaciones WHERE id=?", (fact_id,))
-            conn.commit()
+            conn.execute("DELETE FROM facturaciones WHERE id=?", (fact_id,)); conn.commit()
         finally:
             conn.close()
 
@@ -370,41 +363,27 @@ def delete_facturacion(fact_id):
 
 def get_cierres():
     if _use_supabase():
-        r = _supabase().table("cierres_mensuales").select("*").order("anio_mes", desc=True).execute()
-        return r.data or []
+        return _sb_get("cierres_mensuales", order="anio_mes.desc") or []
     conn = get_conn()
     try:
-        return [dict(x) for x in conn.execute(
-            "SELECT * FROM cierres_mensuales ORDER BY anio_mes DESC").fetchall()]
+        return [dict(x) for x in conn.execute("SELECT * FROM cierres_mensuales ORDER BY anio_mes DESC").fetchall()]
     finally:
         conn.close()
 
 
 def save_cierre(data: dict):
-    """Guarda o reemplaza el cierre de un mes (upsert por anio_mes)."""
-    payload = {
-        "anio_mes":      data["anio_mes"],        # "2026-05"
-        "eventos":       data.get("eventos", 0),
-        "rentas":        data.get("rentas", 0),
-        "autos":         data.get("autos", 0),
-        "facturaciones": data.get("facturaciones", 0),
-        "notas":         data.get("notas"),
-    }
+    payload = {k: data.get(k, 0) if k != "notas" and k != "anio_mes" else data.get(k)
+               for k in ["anio_mes","eventos","rentas","autos","facturaciones","notas"]}
     if _use_supabase():
-        # upsert: si ya existe ese mes lo actualiza
-        _supabase().table("cierres_mensuales").upsert(payload, on_conflict="anio_mes").execute()
+        _sb_upsert("cierres_mensuales", payload, "anio_mes")
     else:
         conn = get_conn()
         try:
-            conn.execute("""INSERT INTO cierres_mensuales
-                (anio_mes,eventos,rentas,autos,facturaciones,notas)
-                VALUES (?,?,?,?,?,?)
-                ON CONFLICT(anio_mes) DO UPDATE SET
-                eventos=excluded.eventos, rentas=excluded.rentas,
-                autos=excluded.autos, facturaciones=excluded.facturaciones,
-                notas=excluded.notas""",
-                (payload["anio_mes"], payload["eventos"], payload["rentas"],
-                 payload["autos"], payload["facturaciones"], payload["notas"]))
+            conn.execute("""INSERT INTO cierres_mensuales (anio_mes,eventos,rentas,autos,facturaciones,notas)
+                VALUES (?,?,?,?,?,?) ON CONFLICT(anio_mes) DO UPDATE SET
+                eventos=excluded.eventos,rentas=excluded.rentas,
+                autos=excluded.autos,facturaciones=excluded.facturaciones,notas=excluded.notas""",
+                tuple(payload.values()))
             conn.commit()
         finally:
             conn.close()
@@ -412,12 +391,11 @@ def save_cierre(data: dict):
 
 def delete_cierre(anio_mes: str):
     if _use_supabase():
-        _supabase().table("cierres_mensuales").delete().eq("anio_mes", anio_mes).execute()
+        _sb_delete("cierres_mensuales", "anio_mes", anio_mes)
     else:
         conn = get_conn()
         try:
-            conn.execute("DELETE FROM cierres_mensuales WHERE anio_mes=?", (anio_mes,))
-            conn.commit()
+            conn.execute("DELETE FROM cierres_mensuales WHERE anio_mes=?", (anio_mes,)); conn.commit()
         finally:
             conn.close()
 
