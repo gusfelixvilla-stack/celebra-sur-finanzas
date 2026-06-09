@@ -396,6 +396,25 @@ with tab_dash:
     util_autos    = sum(a["utilidad"] for a in todos_autos)
     total_facts_monto = sum(f["monto"] for f in todas_facts)
 
+    total_utilidades = total_util_ev + util_autos + rent_cobradas + total_facts_monto
+
+    # ── KPI estrella: Total utilidades ───────────────────────────────────────
+    st.markdown(
+        f"""<div style="background:linear-gradient(135deg,#1e3a8a,#1d4ed8);
+        border-radius:16px;padding:20px 28px;margin-bottom:18px;text-align:center;">
+        <div style="color:#bfdbfe;font-size:0.85rem;font-weight:600;letter-spacing:1px;
+        text-transform:uppercase;">💰 TOTAL UTILIDADES ACUMULADAS</div>
+        <div style="color:#ffffff;font-size:2.4rem;font-weight:800;margin:6px 0;">
+        {fmt_mxn(total_utilidades)}</div>
+        <div style="color:#93c5fd;font-size:0.8rem;">
+        Eventos {fmt_mxn(total_util_ev)} &nbsp;+&nbsp;
+        Rentas {fmt_mxn(rent_cobradas)} &nbsp;+&nbsp;
+        Autos {fmt_mxn(util_autos)} &nbsp;+&nbsp;
+        Facturaciones {fmt_mxn(total_facts_monto)}
+        </div></div>""",
+        unsafe_allow_html=True
+    )
+
     st.markdown("### 📊 Resumen General")
     g1, g2, g3, g4, g5, g6 = st.columns(6)
     with g1: kpi("Eventos pactados", fmt_mxn(total_pactado), f"{len(todos_ev)} eventos", "blue")
