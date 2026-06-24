@@ -566,25 +566,24 @@ with tab_dash:
     mes_actual_str = hoy_mes.strftime("%Y-%m")
     MESES_NOMBRES = ["Ene","Feb","Mar","Abr","May","Jun","Jul","Ago","Sep","Oct","Nov","Dic"]
 
-    # Calcular mes actual en tiempo real desde transacciones
-    def _total_mes_actual():
-        mes = hoy_mes.strftime("%Y-%m")
+    # Calcular totales reales para cualquier mes desde las transacciones
+    def _total_mes(anio_mes: str) -> dict:
         ev = sum(
             (e["monto_apartado"] or 0) + ((e["costo_total"] - e["monto_apartado"])
             if e["estatus"] == "Liquidado" else 0)
             for e in get_eventos()
-            if (e.get("fecha_apartado") or "")[:7] == mes or
-               (e.get("fecha_liquidacion") or "")[:7] == mes
+            if (e.get("fecha_apartado") or "")[:7] == anio_mes or
+               (e.get("fecha_liquidacion") or "")[:7] == anio_mes
         )
         rent = sum(r["monto_renta"] for r in get_rentas()
-                   if (r.get("fecha_ingreso_real") or "")[:7] == mes)
+                   if (r.get("fecha_ingreso_real") or "")[:7] == anio_mes)
         autos_m = sum(a["utilidad"] for a in get_autos()
-                      if (a.get("fecha") or "")[:7] == mes)
+                      if (a.get("fecha") or "")[:7] == anio_mes)
         facts_m = sum(f["monto"] for f in get_facturaciones()
-                      if (f.get("fecha") or "")[:7] == mes)
+                      if (f.get("fecha") or "")[:7] == anio_mes)
         return {"eventos": ev, "rentas": rent, "autos": autos_m, "facturaciones": facts_m}
 
-    mes_act = _total_mes_actual()
+    mes_act = _total_mes(mes_actual_str)
     total_mes_act = sum(mes_act.values())
 
     # KPIs del mes actual
@@ -624,13 +623,33 @@ with tab_dash:
         ym_sel, _ = opciones_mes_uniq[sel_mes_idx]
         existente = cierres_dict.get(ym_sel, {})
 
+        # Auto-calc desde registros reales
+        _precalc_key = f"_precalc_{ym_sel}"
+        col_auto, col_auto_info = st.columns([1, 3])
+        with col_auto:
+            if st.button("📊 Auto-calcular desde registros", key="c_auto", use_container_width=True):
+                calc = _total_mes(ym_sel)
+                st.session_state[_precalc_key] = calc
+                for k in ["c_ev", "c_rent", "c_autos", "c_facts"]:
+                    st.session_state.pop(k, None)
+                st.rerun()
+        _precalc = st.session_state.get(_precalc_key, {})
+        if _precalc:
+            with col_auto_info:
+                st.caption(f"✅ Auto-calculado: Ev {fmt_mxn(_precalc.get('eventos',0))} · Rent {fmt_mxn(_precalc.get('rentas',0))} · Autos {fmt_mxn(_precalc.get('autos',0))} · Facts {fmt_mxn(_precalc.get('facturaciones',0))}")
+
+        ev_default   = float(_precalc.get("eventos",      existente.get("eventos",      0)))
+        rent_default = float(_precalc.get("rentas",       existente.get("rentas",       0)))
+        auto_default = float(_precalc.get("autos",        existente.get("autos",        0)))
+        fact_default = float(_precalc.get("facturaciones", existente.get("facturaciones", 0)))
+
         cm1, cm2 = st.columns(2)
         with cm1:
-            ev_c   = st.number_input("Eventos ($)", min_value=0.0, value=float(existente.get("eventos",0)), step=100.0, key="c_ev")
-            rent_c = st.number_input("Rentas ($)", min_value=0.0, value=float(existente.get("rentas",0)), step=100.0, key="c_rent")
+            ev_c   = st.number_input("Eventos ($)", min_value=0.0, value=ev_default,   step=100.0, key="c_ev")
+            rent_c = st.number_input("Rentas ($)",  min_value=0.0, value=rent_default, step=100.0, key="c_rent")
         with cm2:
-            autos_c = st.number_input("Autos — Utilidad ($)", min_value=0.0, value=float(existente.get("autos",0)), step=100.0, key="c_autos")
-            facts_c = st.number_input("Facturaciones ($)", min_value=0.0, value=float(existente.get("facturaciones",0)), step=100.0, key="c_facts")
+            autos_c = st.number_input("Autos — Utilidad ($)", min_value=0.0, value=auto_default, step=100.0, key="c_autos")
+            facts_c = st.number_input("Facturaciones ($)",    min_value=0.0, value=fact_default, step=100.0, key="c_facts")
         notas_c = st.text_input("Notas del mes", value=existente.get("notas") or "", key="c_notas")
 
         total_c = ev_c + rent_c + autos_c + facts_c
@@ -811,16 +830,18 @@ with tab_eventos:
                         "fecha_liquidacion": fecha_liq.isoformat() if fecha_liq else None,
                         "utilidad": utilidad_monto,
                     }
-                    save_evento(payload, edit_id)
+                    nuevo_id = save_evento(payload, edit_id)
                     st.session_state.fecha_presel = None
                     accion = "Editó evento" if edit_id else "Creó evento"
-                    log_accion(usuario_activo, accion, "Eventos", f"{concepto} — {fmt_mxn(costo_total)}")
+                    log_accion(usuario_activo, accion, "Eventos", f"{concepto} — {fmt_mxn(costo_total)}",
+                               referencia_id=nuevo_id, referencia_tabla="eventos")
                     st.success("Evento guardado ✓")
                     st.rerun()
         with cd:
             if edit_id and st.button("🗑️ Eliminar", use_container_width=True, key="ev_del"):
                 log_accion(usuario_activo, "Eliminó evento", "Eventos",
-                           f"#{edit_id} {ev.get('concepto')} — {fmt_mxn(ev.get('costo_total',0))}")
+                           f"#{edit_id} {ev.get('concepto')} — {fmt_mxn(ev.get('costo_total',0))}",
+                           referencia_id=edit_id, referencia_tabla="eventos")
                 delete_evento(edit_id)
                 st.warning("Evento eliminado.")
                 st.rerun()
@@ -1089,16 +1110,18 @@ with tab_rentas:
                     "fecha_ingreso_real": fecha_ing.isoformat() if fecha_ing else None,
                     "notas": notas or None,
                 }
-                save_renta(payload, rent_id)
+                nuevo_id = save_renta(payload, rent_id)
                 accion = "Editó renta" if rent_id else "Creó renta"
                 log_accion(usuario_activo, accion, "Rentas",
-                           f"{propiedad} {fecha_ini}→{fecha_venc} — {fmt_mxn(monto_renta)}")
+                           f"{propiedad} {fecha_ini}→{fecha_venc} — {fmt_mxn(monto_renta)}",
+                           referencia_id=nuevo_id, referencia_tabla="rentas")
                 st.success("Renta guardada ✓")
                 st.rerun()
         with cd2:
             if rent_id and st.button("🗑️ Eliminar", use_container_width=True, key="r_del"):
                 log_accion(usuario_activo, "Eliminó renta", "Rentas",
-                           f"#{rent_id} {r.get('propiedad')} {r.get('fecha_vencimiento')}")
+                           f"#{rent_id} {r.get('propiedad')} {r.get('fecha_vencimiento')}",
+                           referencia_id=rent_id, referencia_tabla="rentas")
                 delete_renta(rent_id)
                 st.warning("Eliminado.")
                 st.rerun()
@@ -1178,15 +1201,17 @@ with tab_autos:
                     "tipo": tipo_auto,
                     "notas": notas_a or None,
                 }
-                save_auto(payload_a, auto_id)
+                nuevo_id = save_auto(payload_a, auto_id)
                 log_accion(usuario_activo, "Editó auto" if auto_id else "Registró auto", "Autos",
-                           f"{unidad} {tipo_auto} — Utilidad: {fmt_mxn(utilidad_a)}")
+                           f"{unidad} {tipo_auto} — Utilidad: {fmt_mxn(utilidad_a)}",
+                           referencia_id=nuevo_id, referencia_tabla="autos")
                 st.success("Guardado ✓")
                 st.rerun()
         with ca2:
             if auto_id and st.button("🗑️ Eliminar", use_container_width=True, key="a_del"):
+                log_accion(usuario_activo, "Eliminó auto", "Autos", f"#{auto_id} {a.get('unidad')}",
+                           referencia_id=auto_id, referencia_tabla="autos")
                 delete_auto(auto_id)
-                log_accion(usuario_activo, "Eliminó auto", "Autos", f"#{auto_id} {a.get('unidad')}")
                 st.warning("Eliminado.")
                 st.rerun()
 
@@ -1270,15 +1295,17 @@ with tab_fact:
                     "monto": monto_f,
                     "notas": notas_f or None,
                 }
-                save_facturacion(payload_f, fact_id)
+                nuevo_id = save_facturacion(payload_f, fact_id)
                 log_accion(usuario_activo, "Editó facturación" if fact_id else "Registró facturación", "Facturaciones",
-                           f"{cliente_f} — {tipo_f} — {fmt_mxn(monto_f)}")
+                           f"{cliente_f} — {tipo_f} — {fmt_mxn(monto_f)}",
+                           referencia_id=nuevo_id, referencia_tabla="facturaciones")
                 st.success("Guardado ✓")
                 st.rerun()
         with cf2:
             if fact_id and st.button("🗑️ Eliminar", use_container_width=True, key="f_del"):
+                log_accion(usuario_activo, "Eliminó facturación", "Facturaciones", f"#{fact_id} {fac.get('cliente')}",
+                           referencia_id=fact_id, referencia_tabla="facturaciones")
                 delete_facturacion(fact_id)
-                log_accion(usuario_activo, "Eliminó facturación", "Facturaciones", f"#{fact_id} {fac.get('cliente')}")
                 st.warning("Eliminado.")
                 st.rerun()
 

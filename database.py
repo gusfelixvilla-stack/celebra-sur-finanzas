@@ -49,17 +49,21 @@ def _sb_get(table, order=None, limit=None):
 
 
 def _sb_insert(table, payload):
-    """INSERT via REST API de Supabase."""
+    """INSERT via REST API de Supabase — devuelve el ID del registro creado."""
     import requests
     url, key = _get_supabase_creds()
     headers = {
         "apikey": key,
         "Authorization": f"Bearer {key}",
         "Content-Type": "application/json",
-        "Prefer": "return=minimal",
+        "Prefer": "return=representation",
     }
     r = requests.post(f"{url}/rest/v1/{table}", json=payload, headers=headers, timeout=10)
     r.raise_for_status()
+    result = r.json()
+    if result and isinstance(result, list):
+        return result[0].get("id")
+    return None
 
 
 def _sb_update(table, payload, match_col, match_val):
@@ -164,9 +168,14 @@ def init_db():
 
 # ── API de datos ──────────────────────────────────────────────────────────────
 
-def log_accion(usuario, accion, modulo, detalle=""):
+def log_accion(usuario, accion, modulo, detalle="", referencia_id=None, referencia_tabla=None):
     if _use_supabase():
-        _sb_insert("historial", {"usuario": usuario, "accion": accion, "modulo": modulo, "detalle": detalle})
+        payload = {"usuario": usuario, "accion": accion, "modulo": modulo, "detalle": detalle}
+        if referencia_id is not None:
+            payload["referencia_id"] = referencia_id
+        if referencia_tabla:
+            payload["referencia_tabla"] = referencia_tabla
+        _sb_insert("historial", payload)
     else:
         conn = get_conn()
         try:
@@ -212,18 +221,22 @@ def save_evento(data: dict, evento_id=None):
     if _use_supabase():
         if evento_id:
             _sb_update("eventos", payload, "id", evento_id)
+            return evento_id
         else:
-            _sb_insert("eventos", payload)
+            return _sb_insert("eventos", payload)
     else:
         conn = get_conn()
         try:
             if evento_id:
                 conn.execute("""UPDATE eventos SET fecha_evento=?,concepto=?,costo_total=?,monto_apartado=?,fecha_apartado=?,estatus=?,fecha_liquidacion=?,utilidad=? WHERE id=?""",
                     (*payload.values(), evento_id))
+                conn.commit()
+                return evento_id
             else:
-                conn.execute("""INSERT INTO eventos (fecha_evento,concepto,costo_total,monto_apartado,fecha_apartado,estatus,fecha_liquidacion,utilidad) VALUES (?,?,?,?,?,?,?,?)""",
+                cur = conn.execute("""INSERT INTO eventos (fecha_evento,concepto,costo_total,monto_apartado,fecha_apartado,estatus,fecha_liquidacion,utilidad) VALUES (?,?,?,?,?,?,?,?)""",
                     tuple(payload.values()))
-            conn.commit()
+                conn.commit()
+                return cur.lastrowid
         finally:
             conn.close()
 
@@ -244,18 +257,22 @@ def save_renta(data: dict, renta_id=None):
     if _use_supabase():
         if renta_id:
             _sb_update("rentas", payload, "id", renta_id)
+            return renta_id
         else:
-            _sb_insert("rentas", payload)
+            return _sb_insert("rentas", payload)
     else:
         conn = get_conn()
         try:
             if renta_id:
                 conn.execute("""UPDATE rentas SET propiedad=?,fecha_inicio=?,fecha_vencimiento=?,monto_renta=?,fecha_ingreso_real=?,notas=? WHERE id=?""",
                     (*payload.values(), renta_id))
+                conn.commit()
+                return renta_id
             else:
-                conn.execute("""INSERT INTO rentas (propiedad,fecha_inicio,fecha_vencimiento,monto_renta,fecha_ingreso_real,notas) VALUES (?,?,?,?,?,?)""",
+                cur = conn.execute("""INSERT INTO rentas (propiedad,fecha_inicio,fecha_vencimiento,monto_renta,fecha_ingreso_real,notas) VALUES (?,?,?,?,?,?)""",
                     tuple(payload.values()))
-            conn.commit()
+                conn.commit()
+                return cur.lastrowid
         finally:
             conn.close()
 
@@ -288,18 +305,22 @@ def save_auto(data: dict, auto_id=None):
     if _use_supabase():
         if auto_id:
             _sb_update("autos", payload, "id", auto_id)
+            return auto_id
         else:
-            _sb_insert("autos", payload)
+            return _sb_insert("autos", payload)
     else:
         conn = get_conn()
         try:
             if auto_id:
                 conn.execute("UPDATE autos SET fecha=?,unidad=?,costo=?,utilidad=?,tipo=?,notas=? WHERE id=?",
                     (*payload.values(), auto_id))
+                conn.commit()
+                return auto_id
             else:
-                conn.execute("INSERT INTO autos (fecha,unidad,costo,utilidad,tipo,notas) VALUES (?,?,?,?,?,?)",
+                cur = conn.execute("INSERT INTO autos (fecha,unidad,costo,utilidad,tipo,notas) VALUES (?,?,?,?,?,?)",
                     tuple(payload.values()))
-            conn.commit()
+                conn.commit()
+                return cur.lastrowid
         finally:
             conn.close()
 
@@ -332,18 +353,22 @@ def save_facturacion(data: dict, fact_id=None):
     if _use_supabase():
         if fact_id:
             _sb_update("facturaciones", payload, "id", fact_id)
+            return fact_id
         else:
-            _sb_insert("facturaciones", payload)
+            return _sb_insert("facturaciones", payload)
     else:
         conn = get_conn()
         try:
             if fact_id:
                 conn.execute("UPDATE facturaciones SET fecha=?,cliente=?,unidad=?,tipo=?,monto=?,notas=? WHERE id=?",
                     (*payload.values(), fact_id))
+                conn.commit()
+                return fact_id
             else:
-                conn.execute("INSERT INTO facturaciones (fecha,cliente,unidad,tipo,monto,notas) VALUES (?,?,?,?,?,?)",
+                cur = conn.execute("INSERT INTO facturaciones (fecha,cliente,unidad,tipo,monto,notas) VALUES (?,?,?,?,?,?)",
                     tuple(payload.values()))
-            conn.commit()
+                conn.commit()
+                return cur.lastrowid
         finally:
             conn.close()
 
