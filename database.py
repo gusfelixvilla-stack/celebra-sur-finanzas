@@ -161,6 +161,15 @@ def init_db():
                 notas TEXT,
                 created_at TEXT DEFAULT (datetime('now','localtime'))
             );
+            CREATE TABLE IF NOT EXISTS gastos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fecha TEXT NOT NULL,
+                modulo TEXT NOT NULL,
+                concepto TEXT NOT NULL,
+                monto REAL NOT NULL DEFAULT 0,
+                notas TEXT,
+                created_at TEXT DEFAULT (datetime('now','localtime'))
+            );
         """)
     finally:
         conn.close()
@@ -421,6 +430,54 @@ def delete_cierre(anio_mes: str):
         conn = get_conn()
         try:
             conn.execute("DELETE FROM cierres_mensuales WHERE anio_mes=?", (anio_mes,)); conn.commit()
+        finally:
+            conn.close()
+
+
+# ── Gastos ────────────────────────────────────────────────────────────────────
+
+def get_gastos():
+    if _use_supabase():
+        return _sb_get("gastos", order="fecha.desc") or []
+    conn = get_conn()
+    try:
+        return [dict(x) for x in conn.execute("SELECT * FROM gastos ORDER BY fecha DESC").fetchall()]
+    finally:
+        conn.close()
+
+
+def save_gasto(data: dict, gasto_id=None):
+    payload = {k: data.get(k) for k in ["fecha", "modulo", "concepto", "monto", "notas"]}
+    if _use_supabase():
+        if gasto_id:
+            _sb_update("gastos", payload, "id", gasto_id)
+            return gasto_id
+        else:
+            return _sb_insert("gastos", payload)
+    else:
+        conn = get_conn()
+        try:
+            if gasto_id:
+                conn.execute("UPDATE gastos SET fecha=?,modulo=?,concepto=?,monto=?,notas=? WHERE id=?",
+                    (*payload.values(), gasto_id))
+                conn.commit()
+                return gasto_id
+            else:
+                cur = conn.execute("INSERT INTO gastos (fecha,modulo,concepto,monto,notas) VALUES (?,?,?,?,?)",
+                    tuple(payload.values()))
+                conn.commit()
+                return cur.lastrowid
+        finally:
+            conn.close()
+
+
+def delete_gasto(gasto_id):
+    if _use_supabase():
+        _sb_delete("gastos", "id", gasto_id)
+    else:
+        conn = get_conn()
+        try:
+            conn.execute("DELETE FROM gastos WHERE id=?", (gasto_id,)); conn.commit()
         finally:
             conn.close()
 

@@ -8,10 +8,38 @@ from database import (
     get_autos, save_auto, delete_auto,
     get_facturaciones, save_facturacion, delete_facturacion,
     get_cierres, save_cierre, delete_cierre,
+    get_gastos, save_gasto, delete_gasto,
 )
 from contract import generar_contrato
 
 init_db()
+
+# ── Caché 60s — evita re-consultar Supabase en cada interacción ──────────────
+@st.cache_data(ttl=60)
+def _c_eventos(): return _c_eventos()
+
+@st.cache_data(ttl=60)
+def _c_rentas(): return _c_rentas()
+
+@st.cache_data(ttl=60)
+def _c_autos(): return _c_autos()
+
+@st.cache_data(ttl=60)
+def _c_facturaciones(): return _c_facturaciones()
+
+@st.cache_data(ttl=60)
+def _c_historial(): return _c_historial()
+
+@st.cache_data(ttl=60)
+def _c_cierres(): return _c_cierres()
+
+@st.cache_data(ttl=60)
+def _c_gastos(): return get_gastos()
+
+def _clear_cache():
+    for fn in [_c_eventos, _c_rentas, _c_autos, _c_facturaciones,
+               _c_historial, _c_cierres, _c_gastos]:
+        fn.clear()
 
 st.set_page_config(
     page_title="Control Financiero",
@@ -335,7 +363,7 @@ def ingresos_del_dia(dia: date):
     detalle_eventos, detalle_rentas, detalle_autos, detalle_facts = [], [], [], []
     total_eventos = total_rentas = total_autos = total_facts = 0
 
-    for e in get_eventos():
+    for e in _c_eventos():
         aporte, desc = 0, []
         if e["fecha_apartado"] == dia_str and e["monto_apartado"]:
             aporte += e["monto_apartado"]
@@ -348,17 +376,17 @@ def ingresos_del_dia(dia: date):
             total_eventos += aporte
             detalle_eventos.append({"Cliente": e["concepto"], "Detalle": ", ".join(desc), "Monto": aporte})
 
-    for r in get_rentas():
+    for r in _c_rentas():
         if r["fecha_ingreso_real"] == dia_str:
             total_rentas += r["monto_renta"]
             detalle_rentas.append({"Propiedad": r["propiedad"], "Vencimiento": r["fecha_vencimiento"], "Monto": r["monto_renta"]})
 
-    for a in get_autos():
+    for a in _c_autos():
         if a["fecha"] == dia_str:
             total_autos += a["utilidad"]
             detalle_autos.append({"Unidad": a["unidad"], "Tipo": a["tipo"], "Utilidad": a["utilidad"]})
 
-    for f in get_facturaciones():
+    for f in _c_facturaciones():
         if f["fecha"] == dia_str:
             total_facts += f["monto"]
             detalle_facts.append({"Cliente": f["cliente"], "Tipo": f["tipo"], "Monto": f["monto"]})
@@ -370,8 +398,8 @@ def ingresos_del_dia(dia: date):
 # ══════════════════════════════════════════════════════════════════════════════
 # TABS
 # ══════════════════════════════════════════════════════════════════════════════
-tab_dash, tab_eventos, tab_rentas, tab_autos, tab_fact, tab_hist = st.tabs(
-    ["📊 Dashboard", "🎉 Eventos", "🏠 Rentas", "🚗 Autos", "🧾 Facturaciones", "📋 Historial"]
+tab_dash, tab_eventos, tab_rentas, tab_autos, tab_fact, tab_gastos, tab_hist = st.tabs(
+    ["📊 Dashboard", "🎉 Eventos", "🏠 Rentas", "🚗 Autos", "🧾 Facturaciones", "💸 Gastos", "📋 Historial"]
 )
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -380,11 +408,12 @@ tab_dash, tab_eventos, tab_rentas, tab_autos, tab_fact, tab_hist = st.tabs(
 with tab_dash:
     st.markdown('<div class="bg-dash">', unsafe_allow_html=True)
 
-    # ── KPIs globales siempre visibles ────────────────────────────────────────
-    todos_ev   = get_eventos()
-    todas_rent = get_rentas()
-    todos_autos = get_autos()
-    todas_facts = get_facturaciones()
+    # ── Datos globales ────────────────────────────────────────────────────────
+    todos_ev    = _c_eventos()
+    todas_rent  = _c_rentas()
+    todos_autos = _c_autos()
+    todas_facts = _c_facturaciones()
+    todos_gastos = _c_gastos()
 
     total_pactado  = sum(e["costo_total"] for e in todos_ev)
     total_cobrado  = sum(
@@ -392,22 +421,55 @@ with tab_dash:
         if e["estatus"] == "Liquidado" else 0)
         for e in todos_ev
     )
-    total_util_ev = sum(e.get("utilidad", 0) for e in todos_ev)
-    rent_cobradas = sum(r["monto_renta"] for r in todas_rent if r["fecha_ingreso_real"])
-    util_autos    = sum(a["utilidad"] for a in todos_autos)
+    total_util_ev     = sum(e.get("utilidad", 0) for e in todos_ev)
+    rent_cobradas     = sum(r["monto_renta"] for r in todas_rent if r["fecha_ingreso_real"])
+    util_autos        = sum(a["utilidad"] for a in todos_autos)
     total_facts_monto = sum(f["monto"] for f in todas_facts)
+    total_gastos_monto = sum(g["monto"] for g in todos_gastos)
 
-    total_utilidades = total_util_ev + util_autos + rent_cobradas + total_facts_monto
+    total_ingresos   = total_util_ev + util_autos + rent_cobradas + total_facts_monto
+    utilidad_neta    = total_ingresos - total_gastos_monto
 
-    # ── KPI estrella: Total utilidades ───────────────────────────────────────
+    # ── Alertas automáticas ──────────────────────────────────────────────────
+    _alertas = []
+    for _r in todas_rent:
+        if not _r["fecha_ingreso_real"]:
+            _est_r = estatus_renta(_r["fecha_vencimiento"], None)
+            if _est_r == "Atrasado":
+                _alertas.append(f"🔴 <b>{_r['propiedad']}</b> — renta vencida el {_r['fecha_vencimiento']} ({fmt_mxn(_r['monto_renta'])})")
+            elif _est_r == "Pendiente":
+                _dias_r = (date.fromisoformat(_r["fecha_vencimiento"]) - date.today()).days
+                if _dias_r <= 5:
+                    _alertas.append(f"🟡 <b>{_r['propiedad']}</b> — renta vence en {_dias_r} días ({fmt_mxn(_r['monto_renta'])})")
+    for _e in todos_ev:
+        if _e["estatus"] == "Apartado" and _e.get("fecha_evento"):
+            _dias_e = (date.fromisoformat(_e["fecha_evento"]) - date.today()).days
+            _saldo_e = _e["costo_total"] - _e["monto_apartado"]
+            if _saldo_e > 0:
+                if -7 <= _dias_e < 0:
+                    _alertas.append(f"🔴 <b>{_e['concepto']}</b> — evento hace {-_dias_e}d, saldo pendiente {fmt_mxn(_saldo_e)}")
+                elif 0 <= _dias_e <= 3:
+                    _alertas.append(f"🟡 <b>{_e['concepto']}</b> — evento en {_dias_e}d, cobrar saldo {fmt_mxn(_saldo_e)}")
+    if _alertas:
+        st.markdown(
+            f"""<div style="background:#fef2f2;border:1.5px solid #fca5a5;border-radius:12px;
+            padding:14px 18px;margin-bottom:16px;">
+            <b style="color:#991b1b;">⚠️ Alertas</b><br>
+            {"<br>".join(_alertas)}
+            </div>""", unsafe_allow_html=True)
+
+    # ── Banner de utilidad neta ───────────────────────────────────────────────
     st.markdown(
         f"""<div style="background:linear-gradient(135deg,#1e3a8a,#1d4ed8);
         border-radius:16px;padding:20px 28px;margin-bottom:18px;text-align:center;">
         <div style="color:#bfdbfe;font-size:0.85rem;font-weight:600;letter-spacing:1px;
-        text-transform:uppercase;">💰 TOTAL UTILIDADES ACUMULADAS</div>
+        text-transform:uppercase;">💰 UTILIDAD NETA ACUMULADA</div>
         <div style="color:#ffffff;font-size:2.4rem;font-weight:800;margin:6px 0;">
-        {fmt_mxn(total_utilidades)}</div>
+        {fmt_mxn(utilidad_neta)}</div>
         <div style="color:#93c5fd;font-size:0.8rem;">
+        Ingresos {fmt_mxn(total_ingresos)} &nbsp;−&nbsp;
+        Gastos <span style="color:#fca5a5">{fmt_mxn(total_gastos_monto)}</span>
+        </div><div style="color:#93c5fd;font-size:0.75rem;margin-top:4px;">
         Eventos {fmt_mxn(total_util_ev)} &nbsp;+&nbsp;
         Rentas {fmt_mxn(rent_cobradas)} &nbsp;+&nbsp;
         Autos {fmt_mxn(util_autos)} &nbsp;+&nbsp;
@@ -416,14 +478,47 @@ with tab_dash:
         unsafe_allow_html=True
     )
 
+    # ── Búsqueda global ──────────────────────────────────────────────────────
+    _q = st.text_input("🔍 Buscar en todos los módulos",
+                        placeholder="Cliente, propiedad, unidad, concepto...",
+                        key="dash_search", label_visibility="visible")
+    if _q:
+        _ql = _q.lower()
+        _res = []
+        for _e in todos_ev:
+            if _ql in (_e.get("concepto") or "").lower():
+                _res.append({"Módulo": "🎉 Evento", "Concepto": _e["concepto"],
+                             "Fecha": _e["fecha_evento"], "Monto": fmt_mxn(_e["costo_total"])})
+        for _r in todas_rent:
+            if _ql in (_r.get("propiedad") or "").lower() or _ql in (_r.get("notas") or "").lower():
+                _res.append({"Módulo": "🏠 Renta", "Concepto": _r["propiedad"],
+                             "Fecha": _r["fecha_vencimiento"], "Monto": fmt_mxn(_r["monto_renta"])})
+        for _a in todos_autos:
+            if _ql in (_a.get("unidad") or "").lower() or _ql in (_a.get("notas") or "").lower():
+                _res.append({"Módulo": "🚗 Auto", "Concepto": _a["unidad"],
+                             "Fecha": _a["fecha"], "Monto": fmt_mxn(_a["utilidad"])})
+        for _f in todas_facts:
+            if _ql in (_f.get("cliente") or "").lower() or _ql in (_f.get("unidad") or "").lower():
+                _res.append({"Módulo": "🧾 Facturación", "Concepto": _f["cliente"],
+                             "Fecha": _f["fecha"], "Monto": fmt_mxn(_f["monto"])})
+        for _g in todos_gastos:
+            if _ql in (_g.get("concepto") or "").lower() or _ql in (_g.get("modulo") or "").lower():
+                _res.append({"Módulo": "💸 Gasto", "Concepto": _g["concepto"],
+                             "Fecha": _g["fecha"], "Monto": fmt_mxn(_g["monto"])})
+        if _res:
+            st.dataframe(pd.DataFrame(_res), use_container_width=True, hide_index=True)
+        else:
+            st.caption(f"Sin resultados para «{_q}»")
+
     st.markdown("### 📊 Resumen General")
-    g1, g2, g3, g4, g5, g6 = st.columns(6)
+    g1, g2, g3, g4, g5, g6, g7 = st.columns(7)
     with g1: kpi("Eventos pactados", fmt_mxn(total_pactado), f"{len(todos_ev)} eventos", "blue")
     with g2: kpi("Cobrado eventos", fmt_mxn(total_cobrado), "Apartados + liquidados", "green")
     with g3: kpi("Rentas cobradas", fmt_mxn(rent_cobradas), f"{sum(1 for r in todas_rent if r['fecha_ingreso_real'])} pagos", "purple")
     with g4: kpi("Utilidades eventos", fmt_mxn(total_util_ev), "Ganancia neta", "orange")
     with g5: kpi("Utilidad autos", fmt_mxn(util_autos), f"{len(todos_autos)} ventas", "green")
     with g6: kpi("Facturaciones", fmt_mxn(total_facts_monto), f"{len(todas_facts)} facturas", "blue")
+    with g7: kpi("Total gastos", fmt_mxn(total_gastos_monto), f"{len(todos_gastos)} registros", "orange")
 
     st.markdown("---")
 
@@ -533,17 +628,50 @@ with tab_dash:
         resumen.append({"Fecha": d.strftime("%d/%m"), "Eventos": te, "Rentas": tr, "Autos": ta, "Facturaciones": tf})
     st.bar_chart(pd.DataFrame(resumen).set_index("Fecha"))
 
+    # ── Flujo de caja proyectado ──────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 💸 Flujo de Caja — Próximos 30 días")
+    _fin30 = date.today() + timedelta(days=30)
+    _proyeccion = []
+    for _e in todos_ev:
+        if _e["estatus"] == "Apartado" and _e.get("fecha_evento"):
+            _fe = date.fromisoformat(_e["fecha_evento"])
+            if date.today() <= _fe <= _fin30:
+                _saldo = _e["costo_total"] - _e["monto_apartado"]
+                if _saldo > 0:
+                    _proyeccion.append({"Fecha": _fe.isoformat(), "Tipo": "🎉 Evento",
+                                        "Concepto": _e["concepto"], "Esperado": _saldo})
+    for _r in todas_rent:
+        if not _r["fecha_ingreso_real"]:
+            _fv = date.fromisoformat(_r["fecha_vencimiento"])
+            if date.today() <= _fv <= _fin30:
+                _proyeccion.append({"Fecha": _fv.isoformat(), "Tipo": "🏠 Renta",
+                                    "Concepto": _r["propiedad"], "Esperado": _r["monto_renta"]})
+    _proyeccion.sort(key=lambda x: x["Fecha"])
+    _total_proy = sum(p["Esperado"] for p in _proyeccion)
+    pf1, pf2 = st.columns([1, 3])
+    with pf1:
+        kpi("Esperado próx. 30d", fmt_mxn(_total_proy), f"{len(_proyeccion)} cobros", "green")
+    with pf2:
+        if _proyeccion:
+            _df_proy = pd.DataFrame(_proyeccion)
+            _df_proy["Esperado"] = _df_proy["Esperado"].apply(fmt_mxn)
+            st.dataframe(_df_proy, use_container_width=True, hide_index=True)
+        else:
+            st.info("No hay cobros pendientes en los próximos 30 días.")
+
     # ── Botón descargar Excel ─────────────────────────────────────────────────
     st.markdown("---")
     st.markdown("### 📥 Descargar respaldo")
     import io
     buffer = io.BytesIO()
     tablas = {
-        "Eventos": get_eventos(),
-        "Rentas": get_rentas(),
-        "Autos": get_autos(),
-        "Facturaciones": get_facturaciones(),
-        "Historial": get_historial(),
+        "Eventos": _c_eventos(),
+        "Rentas": _c_rentas(),
+        "Autos": _c_autos(),
+        "Facturaciones": _c_facturaciones(),
+        "Gastos": _c_gastos(),
+        "Historial": _c_historial(),
     }
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
         for nombre, datos in tablas.items():
@@ -571,15 +699,15 @@ with tab_dash:
         ev = sum(
             (e["monto_apartado"] or 0) + ((e["costo_total"] - e["monto_apartado"])
             if e["estatus"] == "Liquidado" else 0)
-            for e in get_eventos()
+            for e in _c_eventos()
             if (e.get("fecha_apartado") or "")[:7] == anio_mes or
                (e.get("fecha_liquidacion") or "")[:7] == anio_mes
         )
-        rent = sum(r["monto_renta"] for r in get_rentas()
+        rent = sum(r["monto_renta"] for r in _c_rentas()
                    if (r.get("fecha_ingreso_real") or "")[:7] == anio_mes)
-        autos_m = sum(a["utilidad"] for a in get_autos()
+        autos_m = sum(a["utilidad"] for a in _c_autos()
                       if (a.get("fecha") or "")[:7] == anio_mes)
-        facts_m = sum(f["monto"] for f in get_facturaciones()
+        facts_m = sum(f["monto"] for f in _c_facturaciones()
                       if (f.get("fecha") or "")[:7] == anio_mes)
         return {"eventos": ev, "rentas": rent, "autos": autos_m, "facturaciones": facts_m}
 
@@ -599,7 +727,7 @@ with tab_dash:
 
     # ── Capturar cierre de mes anterior ──────────────────────────────────────
     st.markdown("#### 📥 Capturar mes anterior")
-    cierres = get_cierres()
+    cierres = _c_cierres()
     cierres_dict = {c["anio_mes"]: c for c in cierres}
 
     with st.expander("➕ Registrar / Editar mes anterior", expanded=False):
@@ -632,7 +760,7 @@ with tab_dash:
                 st.session_state[_precalc_key] = calc
                 for k in ["c_ev", "c_rent", "c_autos", "c_facts"]:
                     st.session_state.pop(k, None)
-                st.rerun()
+                _clear_cache(); st.rerun()
         _precalc = st.session_state.get(_precalc_key, {})
         if _precalc:
             with col_auto_info:
@@ -662,12 +790,12 @@ with tab_dash:
                              "autos": autos_c, "facturaciones": facts_c, "notas": notas_c or None})
                 log_accion(usuario_activo, "Guardó cierre mensual", "Dashboard", f"{ym_sel} — {fmt_mxn(total_c)}")
                 st.success("Guardado ✓")
-                st.rerun()
+                _clear_cache(); st.rerun()
         with cc2:
             if ym_sel in cierres_dict and st.button("🗑️ Eliminar", use_container_width=True, key="c_del"):
                 delete_cierre(ym_sel)
                 st.warning("Eliminado.")
-                st.rerun()
+                _clear_cache(); st.rerun()
 
     # ── Gráfica comparativa de meses ─────────────────────────────────────────
     st.markdown("#### 📊 Comparativa mensual (últimos 12 meses + actual)")
@@ -717,7 +845,7 @@ with tab_eventos:
     st.markdown("### 🎉 Local de Eventos")
 
     # ── Calendario de disponibilidad ──────────────────────────────────────────
-    eventos_todos = get_eventos()
+    eventos_todos = _c_eventos()
     fechas_ocupadas = {}
     for e in eventos_todos:
         try:
@@ -771,7 +899,7 @@ with tab_eventos:
 
     # ── Formulario ────────────────────────────────────────────────────────────
     with st.expander("➕ Registrar / Editar Evento", expanded=False):
-        eventos_lista = get_eventos()
+        eventos_lista = _c_eventos()
         opciones = ["Nuevo Evento"] + [f"#{e['id']} – {e['concepto']} ({e['fecha_evento']})" for e in eventos_lista]
         sel = st.selectbox("Seleccionar", opciones, key="ev_sel")
 
@@ -836,7 +964,7 @@ with tab_eventos:
                     log_accion(usuario_activo, accion, "Eventos", f"{concepto} — {fmt_mxn(costo_total)}",
                                referencia_id=nuevo_id, referencia_tabla="eventos")
                     st.success("Evento guardado ✓")
-                    st.rerun()
+                    _clear_cache(); st.rerun()
         with cd:
             if edit_id and st.button("🗑️ Eliminar", use_container_width=True, key="ev_del"):
                 log_accion(usuario_activo, "Eliminó evento", "Eventos",
@@ -844,10 +972,10 @@ with tab_eventos:
                            referencia_id=edit_id, referencia_tabla="eventos")
                 delete_evento(edit_id)
                 st.warning("Evento eliminado.")
-                st.rerun()
+                _clear_cache(); st.rerun()
 
     # ── Tabla resumen ─────────────────────────────────────────────────────────
-    eventos = get_eventos()
+    eventos = _c_eventos()
     if eventos:
         rows = []
         for e in eventos:
@@ -875,7 +1003,7 @@ with tab_eventos:
     st.markdown("---")
     st.markdown("### 📄 Generar Contrato en PDF")
 
-    eventos_para_contrato = get_eventos()
+    eventos_para_contrato = _c_eventos()
     if not eventos_para_contrato:
         st.info("Primero registra un evento para generar su contrato.")
     else:
@@ -998,7 +1126,7 @@ with tab_rentas:
     st.markdown('<div class="bg-rentas">', unsafe_allow_html=True)
     st.markdown("### 🏠 Control de Rentas")
 
-    todas_rentas = get_rentas()
+    todas_rentas = _c_rentas()
 
     # ── Calendarios por propiedad ────────────────────────────────────────────
     ICONOS_PROP = {
@@ -1059,7 +1187,7 @@ with tab_rentas:
 
     # ── Formulario ────────────────────────────────────────────────────────────
     with st.expander("➕ Registrar / Editar Renta", expanded=False):
-        rentas_lista = get_rentas()
+        rentas_lista = _c_rentas()
         opciones_r = ["Nueva Renta"] + [
             f"#{r['id']} – {r['propiedad']} ({r.get('fecha_inicio','?')} → {r['fecha_vencimiento']})"
             for r in rentas_lista
@@ -1116,7 +1244,7 @@ with tab_rentas:
                            f"{propiedad} {fecha_ini}→{fecha_venc} — {fmt_mxn(monto_renta)}",
                            referencia_id=nuevo_id, referencia_tabla="rentas")
                 st.success("Renta guardada ✓")
-                st.rerun()
+                _clear_cache(); st.rerun()
         with cd2:
             if rent_id and st.button("🗑️ Eliminar", use_container_width=True, key="r_del"):
                 log_accion(usuario_activo, "Eliminó renta", "Rentas",
@@ -1124,10 +1252,10 @@ with tab_rentas:
                            referencia_id=rent_id, referencia_tabla="rentas")
                 delete_renta(rent_id)
                 st.warning("Eliminado.")
-                st.rerun()
+                _clear_cache(); st.rerun()
 
     # ── Tabla y KPIs ──────────────────────────────────────────────────────────
-    rentas = get_rentas()
+    rentas = _c_rentas()
     if rentas:
         def color_est(val):
             return {"Pagado":"color:#166534","Pendiente":"color:#854d0e","Atrasado":"color:#991b1b"}.get(val,"")
@@ -1166,7 +1294,7 @@ with tab_autos:
 
     # ── Formulario ────────────────────────────────────────────────────────────
     with st.expander("➕ Registrar / Editar Venta", expanded=False):
-        autos_lista = get_autos()
+        autos_lista = _c_autos()
         opciones_a = ["Nueva Venta"] + [
             f"#{a['id']} – {a['unidad']} ({a['fecha']})"
             for a in autos_lista
@@ -1206,17 +1334,17 @@ with tab_autos:
                            f"{unidad} {tipo_auto} — Utilidad: {fmt_mxn(utilidad_a)}",
                            referencia_id=nuevo_id, referencia_tabla="autos")
                 st.success("Guardado ✓")
-                st.rerun()
+                _clear_cache(); st.rerun()
         with ca2:
             if auto_id and st.button("🗑️ Eliminar", use_container_width=True, key="a_del"):
                 log_accion(usuario_activo, "Eliminó auto", "Autos", f"#{auto_id} {a.get('unidad')}",
                            referencia_id=auto_id, referencia_tabla="autos")
                 delete_auto(auto_id)
                 st.warning("Eliminado.")
-                st.rerun()
+                _clear_cache(); st.rerun()
 
     # ── Tabla ─────────────────────────────────────────────────────────────────
-    autos = get_autos()
+    autos = _c_autos()
     if autos:
         total_util = sum(a["utilidad"] for a in autos)
         total_ventas = len(autos)
@@ -1260,7 +1388,7 @@ with tab_fact:
 
     # ── Formulario ────────────────────────────────────────────────────────────
     with st.expander("➕ Registrar / Editar Facturación", expanded=False):
-        facts_lista = get_facturaciones()
+        facts_lista = _c_facturaciones()
         opciones_f = ["Nueva Facturación"] + [
             f"#{f['id']} – {f['cliente']} ({f['tipo']}) {f['fecha']}"
             for f in facts_lista
@@ -1300,17 +1428,17 @@ with tab_fact:
                            f"{cliente_f} — {tipo_f} — {fmt_mxn(monto_f)}",
                            referencia_id=nuevo_id, referencia_tabla="facturaciones")
                 st.success("Guardado ✓")
-                st.rerun()
+                _clear_cache(); st.rerun()
         with cf2:
             if fact_id and st.button("🗑️ Eliminar", use_container_width=True, key="f_del"):
                 log_accion(usuario_activo, "Eliminó facturación", "Facturaciones", f"#{fact_id} {fac.get('cliente')}",
                            referencia_id=fact_id, referencia_tabla="facturaciones")
                 delete_facturacion(fact_id)
                 st.warning("Eliminado.")
-                st.rerun()
+                _clear_cache(); st.rerun()
 
     # ── Tabla ─────────────────────────────────────────────────────────────────
-    facts = get_facturaciones()
+    facts = _c_facturaciones()
     if facts:
         total_f = sum(f["monto"] for f in facts)
         creditos = sum(f["monto"] for f in facts if f["tipo"] == "Crédito")
@@ -1344,14 +1472,108 @@ with tab_fact:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TAB 6 — HISTORIAL  (fondo amarillo claro)
+# TAB 6 — GASTOS
+# ─────────────────────────────────────────────────────────────────────────────
+MODULOS_GASTO = ["Eventos", "Rentas", "Autos", "Facturaciones", "General"]
+
+with tab_gastos:
+    st.markdown('<div class="bg-rentas">', unsafe_allow_html=True)
+    st.markdown("## 💸 Gastos")
+
+    with st.expander("➕ Registrar / Editar Gasto", expanded=False):
+        gastos_lista = _c_gastos()
+        opciones_g = ["Nuevo Gasto"] + [
+            f"#{g['id']} – {g['concepto']} ({g['fecha']})" for g in gastos_lista
+        ]
+        sel_g = st.selectbox("Seleccionar registro", opciones_g, key="g_sel")
+        gasto_id = None
+        g_data = {}
+        if sel_g != "Nuevo Gasto":
+            gasto_id = int(sel_g.split("–")[0].replace("#", "").strip())
+            g_data = next((x for x in gastos_lista if x["id"] == gasto_id), {})
+
+        cg1, cg2 = st.columns(2)
+        with cg1:
+            fecha_g = st.date_input("Fecha",
+                value=date.fromisoformat(g_data["fecha"]) if g_data.get("fecha") else date.today(),
+                key="g_fecha")
+            modulo_g = st.selectbox("Módulo", MODULOS_GASTO,
+                index=MODULOS_GASTO.index(g_data["modulo"]) if g_data.get("modulo") in MODULOS_GASTO else 4,
+                key="g_modulo")
+        with cg2:
+            concepto_g = st.text_input("Concepto / Descripción", value=g_data.get("concepto", ""), key="g_concepto")
+            monto_g = st.number_input("Monto ($)", min_value=0.0,
+                value=float(g_data.get("monto", 0)), step=100.0, key="g_monto")
+        notas_g = st.text_input("Notas", value=g_data.get("notas") or "", key="g_notas")
+
+        cgs, cgd = st.columns(2)
+        with cgs:
+            if st.button("💾 Guardar Gasto", use_container_width=True, key="g_save"):
+                if not concepto_g:
+                    st.error("El concepto es obligatorio.")
+                else:
+                    payload_g = {
+                        "fecha": fecha_g.isoformat(), "modulo": modulo_g,
+                        "concepto": concepto_g, "monto": monto_g,
+                        "notas": notas_g or None,
+                    }
+                    nuevo_gid = save_gasto(payload_g, gasto_id)
+                    log_accion(usuario_activo, "Editó gasto" if gasto_id else "Registró gasto",
+                               "Gastos", f"{concepto_g} — {fmt_mxn(monto_g)}",
+                               referencia_id=nuevo_gid, referencia_tabla="gastos")
+                    st.success("Guardado ✓")
+                    _clear_cache(); st.rerun()
+        with cgd:
+            if gasto_id and st.button("🗑️ Eliminar", use_container_width=True, key="g_del"):
+                log_accion(usuario_activo, "Eliminó gasto", "Gastos",
+                           f"#{gasto_id} {g_data.get('concepto')}",
+                           referencia_id=gasto_id, referencia_tabla="gastos")
+                delete_gasto(gasto_id)
+                st.warning("Eliminado.")
+                _clear_cache(); st.rerun()
+
+    gastos = _c_gastos()
+    if gastos:
+        total_g = sum(g["monto"] for g in gastos)
+        g_by_mod = {}
+        for g in gastos:
+            g_by_mod[g["modulo"]] = g_by_mod.get(g["modulo"], 0) + g["monto"]
+
+        cols_kg = st.columns(min(len(g_by_mod) + 1, 6))
+        cols_colors = ["orange", "blue", "green", "purple", "yellow", "orange"]
+        with cols_kg[0]:
+            kpi("Total gastos", fmt_mxn(total_g), f"{len(gastos)} registros", "orange")
+        for i, (mod, monto_mod) in enumerate(sorted(g_by_mod.items(), key=lambda x: -x[1])):
+            if i + 1 < len(cols_kg):
+                with cols_kg[i + 1]:
+                    kpi(mod, fmt_mxn(monto_mod), "", cols_colors[i % len(cols_colors)])
+
+        st.markdown("#### Registro de gastos")
+        df_g = pd.DataFrame([{
+            "Fecha": g["fecha"], "Módulo": g["modulo"],
+            "Concepto": g["concepto"], "Monto": fmt_mxn(g["monto"]),
+            "Notas": g.get("notas") or "—",
+        } for g in gastos])
+        st.dataframe(df_g, use_container_width=True, hide_index=True)
+
+        # Mini gráfica por módulo
+        if g_by_mod:
+            st.markdown("#### Por módulo")
+            st.bar_chart(pd.DataFrame(list(g_by_mod.items()), columns=["Módulo", "Total"]).set_index("Módulo"))
+    else:
+        st.info("No hay gastos registrados aún. Registra mantenimientos, insumos y otros costos aquí.")
+    st.markdown('</div>', unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 7 — HISTORIAL  (fondo amarillo claro)
 # ─────────────────────────────────────────────────────────────────────────────
 with tab_hist:
     st.markdown('<div class="bg-hist">', unsafe_allow_html=True)
     st.markdown("### 📋 Historial de Cambios")
     st.caption("Registro automático de cada modificación — quién, qué, cuándo.")
 
-    historial = get_historial()
+    historial = _c_historial()
     if historial:
         df_h = pd.DataFrame(historial)[["fecha", "usuario", "modulo", "accion", "detalle"]]
         df_h.columns = ["Fecha", "Usuario", "Módulo", "Acción", "Detalle"]
