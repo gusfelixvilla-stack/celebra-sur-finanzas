@@ -37,13 +37,15 @@ def _sb_get(table, order=None, limit=None):
     """SELECT * via REST API de Supabase."""
     import requests
     url, key = _get_supabase_creds()
+    if not url or not key:
+        return []
     endpoint = f"{url}/rest/v1/{table}?select=*"
     if order:
         endpoint += f"&order={order}"
     if limit:
         endpoint += f"&limit={limit}"
     headers = {"apikey": key, "Authorization": f"Bearer {key}"}
-    r = requests.get(endpoint, headers=headers, timeout=10)
+    r = requests.get(endpoint, headers=headers, timeout=15)
     r.raise_for_status()
     return r.json()
 
@@ -438,7 +440,10 @@ def delete_cierre(anio_mes: str):
 
 def get_gastos():
     if _use_supabase():
-        return _sb_get("gastos", order="fecha.desc") or []
+        try:
+            return _sb_get("gastos", order="fecha.desc") or []
+        except Exception:
+            return []
     conn = get_conn()
     try:
         return [dict(x) for x in conn.execute("SELECT * FROM gastos ORDER BY fecha DESC").fetchall()]
