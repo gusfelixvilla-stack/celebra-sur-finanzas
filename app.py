@@ -16,22 +16,22 @@ init_db()
 
 # ── Caché 60s — evita re-consultar Supabase en cada interacción ──────────────
 @st.cache_data(ttl=60)
-def _c_eventos(): return _c_eventos()
+def _c_eventos(): return get_eventos()
 
 @st.cache_data(ttl=60)
-def _c_rentas(): return _c_rentas()
+def _c_rentas(): return get_rentas()
 
 @st.cache_data(ttl=60)
-def _c_autos(): return _c_autos()
+def _c_autos(): return get_autos()
 
 @st.cache_data(ttl=60)
-def _c_facturaciones(): return _c_facturaciones()
+def _c_facturaciones(): return get_facturaciones()
 
 @st.cache_data(ttl=60)
-def _c_historial(): return _c_historial()
+def _c_historial(): return get_historial()
 
 @st.cache_data(ttl=60)
-def _c_cierres(): return _c_cierres()
+def _c_cierres(): return get_cierres()
 
 @st.cache_data(ttl=60)
 def _c_gastos(): return get_gastos()
