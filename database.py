@@ -186,7 +186,14 @@ def log_accion(usuario, accion, modulo, detalle="", referencia_id=None, referenc
             payload["referencia_id"] = referencia_id
         if referencia_tabla:
             payload["referencia_tabla"] = referencia_tabla
-        _sb_insert("historial", payload)
+        try:
+            _sb_insert("historial", payload)
+        except Exception:
+            # Si faltan columnas en historial, reintenta sin campos opcionales
+            try:
+                _sb_insert("historial", {"usuario": usuario, "accion": accion, "modulo": modulo, "detalle": detalle})
+            except Exception:
+                pass
     else:
         conn = get_conn()
         try:
