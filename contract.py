@@ -93,7 +93,9 @@ def generar_contrato(
 
     hoy_str = _fecha_es(date.today().isoformat())
     fecha_ev_str = _fecha_es(fecha_evento)
-    hora_fin = f"{int(hora_inicio.split(':')[0]) + horas_servicio:02d}:{hora_inicio.split(':')[1]}"
+    _hi_parts = hora_inicio.strip().split(':') if ':' in hora_inicio else [hora_inicio.strip(), '00']
+    hora_inicio = f"{int(_hi_parts[0]):02d}:{_hi_parts[1]}"
+    hora_fin = f"{(int(_hi_parts[0]) + horas_servicio) % 24:02d}:{_hi_parts[1]}"
 
     # ── ENCABEZADO ─────────────────────────────────────────────────────────
     s.append(Paragraph(nombre_negocio.upper(), st["titulo"]))
