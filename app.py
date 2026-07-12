@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from database import (
     init_db, USE_SUPABASE,
     log_accion, get_eventos, get_rentas, get_historial,
@@ -79,12 +79,6 @@ st.markdown("""
     color: #ffffff !important;
   }
 
-  /* ── Fondo por módulo — colorea el panel completo del tab activo ── */
-  .bg-dash    { background: #bae6fd; border-radius: 16px; padding: 24px; margin-top: 8px; }
-  .bg-eventos { background: #bbf7d0; border-radius: 16px; padding: 24px; margin-top: 8px; }
-  .bg-rentas  { background: #ddd6fe; border-radius: 16px; padding: 24px; margin-top: 8px; }
-  .bg-hist    { background: #fef08a; border-radius: 16px; padding: 24px; margin-top: 8px; }
-
   /* ── Cards KPI ── */
   .card {
     border-radius: 12px;
@@ -129,6 +123,19 @@ st.markdown("""
 
   /* ── Tablas ── */
   .stDataFrame { border-radius: 10px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,.07); }
+
+  /* ── Móvil: tarjetas KPI en 2 columnas en vez de apiladas ── */
+  @media (max-width: 640px) {
+    [data-testid="stHorizontalBlock"] {
+      flex-wrap: wrap !important;
+      gap: 8px !important;
+    }
+    [data-testid="stHorizontalBlock"] > [data-testid="stColumn"] {
+      min-width: 46% !important;
+      flex: 1 1 46% !important;
+      width: 46% !important;
+    }
+  }
 </style>
 """, unsafe_allow_html=True)
 
@@ -144,10 +151,12 @@ with st.container():
     col_u, col_title = st.columns([1, 3])
     with col_u:
         nombre = st.text_input("👤 ¿Quién eres?", value=st.session_state.usuario,
-                                placeholder="Tu nombre", key="_nombre_input",
-                                label_visibility="collapsed")
+                                placeholder="Escribe tu nombre", key="_nombre_input",
+                                help="Se usa para registrar en el Historial quién hizo cada cambio.")
         if nombre != st.session_state.usuario:
             st.session_state.usuario = nombre
+        if not nombre.strip():
+            st.caption("⚠️ Sin nombre, tus cambios se guardan como \"Anónimo\" en el Historial.")
     with col_title:
         st.markdown("# 💰 Control Financiero")
 
@@ -285,6 +294,10 @@ def render_calendario_renta(anio: int, mes: int, rangos_ocupados: list, propieda
     }
     c_acento, c_fondo, c_oscuro = COLORES.get(propiedad, ("#64748b","#f1f5f9","#334155"))
 
+    # Sufijo único por propiedad (no solo por mes) — evita que las 3 casas
+    # compartan las mismas clases CSS y se pisen los colores entre sí.
+    slug = "".join(ch for ch in propiedad.lower() if ch.isalnum()) + f"-{mes}"
+
     # Construir set de fechas ocupadas con su info
     ocupadas = {}
     for fi, ff, nota in rangos_ocupados:
@@ -301,50 +314,50 @@ def render_calendario_renta(anio: int, mes: int, rangos_ocupados: list, propieda
 
     html = f"""
     <style>
-      .rcal-{mes} {{ background:#ffffff; border-radius:14px; padding:14px 10px;
+      .rcal-{slug} {{ background:#ffffff; border-radius:14px; padding:14px 10px;
                      box-shadow:0 2px 8px rgba(0,0,0,.08); margin-bottom:8px; }}
-      .rcal-title-{mes} {{ text-align:center; font-size:.95rem; font-weight:700;
+      .rcal-title-{slug} {{ text-align:center; font-size:.95rem; font-weight:700;
                            color:{c_oscuro}; margin-bottom:8px; }}
-      .rcal-grid-{mes} {{ display:grid; grid-template-columns:repeat(7,1fr); gap:3px; }}
-      .rcal-head-{mes} {{ text-align:center; font-size:.7rem; font-weight:600;
+      .rcal-grid-{slug} {{ display:grid; grid-template-columns:repeat(7,1fr); gap:3px; }}
+      .rcal-head-{slug} {{ text-align:center; font-size:.7rem; font-weight:600;
                           color:#64748b; padding:3px 0; }}
-      .rcal-day-{mes} {{ text-align:center; border-radius:7px; padding:5px 2px;
+      .rcal-day-{slug} {{ text-align:center; border-radius:7px; padding:5px 2px;
                          font-size:.8rem; }}
-      .rcal-libre-{mes} {{ background:{c_fondo}; color:{c_oscuro}; font-weight:600; }}
-      .rcal-ocup-{mes}  {{ background:{c_acento}; color:#fff; font-weight:700;
+      .rcal-libre-{slug} {{ background:{c_fondo}; color:{c_oscuro}; font-weight:600; }}
+      .rcal-ocup-{slug}  {{ background:{c_acento}; color:#fff; font-weight:700;
                            border-radius:7px; cursor:default; }}
-      .rcal-hoy-{mes}   {{ background:#1e40af; color:#fff; font-weight:700; border-radius:50%;}}
-      .rcal-pas-{mes}   {{ color:#cbd5e1; }}
-      .rcal-vacio-{mes} {{ visibility:hidden; }}
-      .rcal-legend-{mes} {{ display:flex; gap:10px; justify-content:center;
+      .rcal-hoy-{slug}   {{ background:#1e40af; color:#fff; font-weight:700; border-radius:50%;}}
+      .rcal-pas-{slug}   {{ color:#cbd5e1; }}
+      .rcal-vacio-{slug} {{ visibility:hidden; }}
+      .rcal-legend-{slug} {{ display:flex; gap:10px; justify-content:center;
                             margin-top:8px; font-size:.72rem; color:#475569; }}
       .rdot {{ width:9px;height:9px;border-radius:50%;display:inline-block;margin-right:3px; }}
     </style>
-    <div class="rcal-{mes}">
-      <div class="rcal-title-{mes}">📅 {MESES_ES[mes-1]} {anio}</div>
-      <div class="rcal-grid-{mes}">
+    <div class="rcal-{slug}">
+      <div class="rcal-title-{slug}">📅 {MESES_ES[mes-1]} {anio}</div>
+      <div class="rcal-grid-{slug}">
     """
     for d in DIAS_ES:
-        html += f'<div class="rcal-head-{mes}">{d}</div>'
+        html += f'<div class="rcal-head-{slug}">{d}</div>'
 
     for semana in cal:
         for dia in semana:
             if dia == 0:
-                html += f'<div class="rcal-day-{mes} rcal-vacio-{mes}">·</div>'
+                html += f'<div class="rcal-day-{slug} rcal-vacio-{slug}">·</div>'
                 continue
             d = date(anio, mes, dia)
             if d in ocupadas:
-                html += f'<div class="rcal-day-{mes} rcal-ocup-{mes}" title="{ocupadas[d]}">🔴{dia}</div>'
+                html += f'<div class="rcal-day-{slug} rcal-ocup-{slug}" title="{ocupadas[d]}">🔴{dia}</div>'
             elif d == hoy:
-                html += f'<div class="rcal-day-{mes} rcal-hoy-{mes}">{dia}</div>'
+                html += f'<div class="rcal-day-{slug} rcal-hoy-{slug}">{dia}</div>'
             elif d < hoy:
-                html += f'<div class="rcal-day-{mes} rcal-pas-{mes}">{dia}</div>'
+                html += f'<div class="rcal-day-{slug} rcal-pas-{slug}">{dia}</div>'
             else:
-                html += f'<div class="rcal-day-{mes} rcal-libre-{mes}">{dia}</div>'
+                html += f'<div class="rcal-day-{slug} rcal-libre-{slug}">{dia}</div>'
 
     html += f"""
       </div>
-      <div class="rcal-legend-{mes}">
+      <div class="rcal-legend-{slug}">
         <span><span class="rdot" style="background:{c_acento}"></span>Ocupado</span>
         <span><span class="rdot" style="background:{c_fondo};border:1px solid {c_acento}"></span>Disponible</span>
         <span><span class="rdot" style="background:#1e40af"></span>Hoy</span>
@@ -406,7 +419,6 @@ tab_dash, tab_eventos, tab_rentas, tab_autos, tab_fact, tab_gastos, tab_hist = s
 # TAB 1 — DASHBOARD  (fondo azul cielo)
 # ─────────────────────────────────────────────────────────────────────────────
 with tab_dash:
-    st.markdown('<div class="bg-dash">', unsafe_allow_html=True)
 
     # ── Datos globales ────────────────────────────────────────────────────────
     todos_ev    = _c_eventos()
@@ -429,6 +441,33 @@ with tab_dash:
 
     total_ingresos   = total_util_ev + util_autos + rent_cobradas + total_facts_monto
     utilidad_neta    = total_ingresos - total_gastos_monto
+
+    # ── Totales del mes en curso (para el banner) ─────────────────────────────
+    MESES_NOMBRES_BANNER = ["Enero","Febrero","Marzo","Abril","Mayo","Junio",
+                             "Julio","Agosto","Septiembre","Octubre","Noviembre","Diciembre"]
+    _hoy_banner = date.today()
+    _mes_banner_str = _hoy_banner.strftime("%Y-%m")
+
+    util_ev_mes = sum(
+        e.get("utilidad", 0) for e in todos_ev
+        if (e.get("fecha_apartado") or "")[:7] == _mes_banner_str
+        or (e.get("fecha_liquidacion") or "")[:7] == _mes_banner_str
+    )
+    rent_cobradas_mes = sum(
+        r["monto_renta"] for r in todas_rent
+        if (r.get("fecha_ingreso_real") or "")[:7] == _mes_banner_str
+    )
+    util_autos_mes = sum(
+        a["utilidad"] for a in todos_autos if (a.get("fecha") or "")[:7] == _mes_banner_str
+    )
+    total_facts_mes = sum(
+        f["monto"] for f in todas_facts if (f.get("fecha") or "")[:7] == _mes_banner_str
+    )
+    total_gastos_mes = sum(
+        g["monto"] for g in todos_gastos if (g.get("fecha") or "")[:7] == _mes_banner_str
+    )
+    total_ingresos_mes = util_ev_mes + util_autos_mes + rent_cobradas_mes + total_facts_mes
+    utilidad_neta_mes   = total_ingresos_mes - total_gastos_mes
 
     # ── Alertas automáticas ──────────────────────────────────────────────────
     _alertas = []
@@ -458,22 +497,46 @@ with tab_dash:
             {"<br>".join(_alertas)}
             </div>""", unsafe_allow_html=True)
 
-    # ── Banner de utilidad neta ───────────────────────────────────────────────
+    # ── Banner de utilidad neta — cambia entre "Este mes" y "Acumulado" ───────
+    vista_banner = st.radio(
+        "Ver utilidad neta:", ["📅 Este mes", "📊 Acumulado histórico"],
+        horizontal=True, key="vista_banner", label_visibility="collapsed",
+    )
+
+    if vista_banner == "📅 Este mes":
+        _titulo_banner = f"💰 UTILIDAD NETA — {MESES_NOMBRES_BANNER[_hoy_banner.month-1].upper()} {_hoy_banner.year}"
+        _monto_banner   = utilidad_neta_mes
+        _ing_banner     = total_ingresos_mes
+        _gas_banner     = total_gastos_mes
+        _ev_banner      = util_ev_mes
+        _rent_banner    = rent_cobradas_mes
+        _auto_banner    = util_autos_mes
+        _fact_banner    = total_facts_mes
+    else:
+        _titulo_banner = "💰 UTILIDAD NETA ACUMULADA"
+        _monto_banner   = utilidad_neta
+        _ing_banner     = total_ingresos
+        _gas_banner     = total_gastos_monto
+        _ev_banner      = total_util_ev
+        _rent_banner    = rent_cobradas
+        _auto_banner    = util_autos
+        _fact_banner    = total_facts_monto
+
     st.markdown(
         f"""<div style="background:linear-gradient(135deg,#1e3a8a,#1d4ed8);
         border-radius:16px;padding:20px 28px;margin-bottom:18px;text-align:center;">
         <div style="color:#bfdbfe;font-size:0.85rem;font-weight:600;letter-spacing:1px;
-        text-transform:uppercase;">💰 UTILIDAD NETA ACUMULADA</div>
+        text-transform:uppercase;">{_titulo_banner}</div>
         <div style="color:#ffffff;font-size:2.4rem;font-weight:800;margin:6px 0;">
-        {fmt_mxn(utilidad_neta)}</div>
+        {fmt_mxn(_monto_banner)}</div>
         <div style="color:#93c5fd;font-size:0.8rem;">
-        Ingresos {fmt_mxn(total_ingresos)} &nbsp;−&nbsp;
-        Gastos <span style="color:#fca5a5">{fmt_mxn(total_gastos_monto)}</span>
+        Ingresos {fmt_mxn(_ing_banner)} &nbsp;−&nbsp;
+        Gastos <span style="color:#fca5a5">{fmt_mxn(_gas_banner)}</span>
         </div><div style="color:#93c5fd;font-size:0.75rem;margin-top:4px;">
-        Eventos {fmt_mxn(total_util_ev)} &nbsp;+&nbsp;
-        Rentas {fmt_mxn(rent_cobradas)} &nbsp;+&nbsp;
-        Autos {fmt_mxn(util_autos)} &nbsp;+&nbsp;
-        Facturaciones {fmt_mxn(total_facts_monto)}
+        Eventos {fmt_mxn(_ev_banner)} &nbsp;+&nbsp;
+        Rentas {fmt_mxn(_rent_banner)} &nbsp;+&nbsp;
+        Autos {fmt_mxn(_auto_banner)} &nbsp;+&nbsp;
+        Facturaciones {fmt_mxn(_fact_banner)}
         </div></div>""",
         unsafe_allow_html=True
     )
@@ -673,18 +736,21 @@ with tab_dash:
         "Gastos": _c_gastos(),
         "Historial": _c_historial(),
     }
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        for nombre, datos in tablas.items():
-            df = pd.DataFrame(datos) if datos else pd.DataFrame(["Sin datos"], columns=["Info"])
-            df.to_excel(writer, sheet_name=nombre, index=False)
-    buffer.seek(0)
-    st.download_button(
-        label="📥 Descargar todo en Excel",
-        data=buffer,
-        file_name=f"celebrasur_{date.today().isoformat()}.xlsx",
-        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        use_container_width=False,
-    )
+    try:
+        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+            for nombre, datos in tablas.items():
+                df = pd.DataFrame(datos) if datos else pd.DataFrame(["Sin datos"], columns=["Info"])
+                df.to_excel(writer, sheet_name=nombre, index=False)
+        buffer.seek(0)
+        st.download_button(
+            label="📥 Descargar todo en Excel",
+            data=buffer,
+            file_name=f"celebrasur_{date.today().isoformat()}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=False,
+        )
+    except Exception as _ex_xlsx:
+        st.caption(f"⚠️ Respaldo Excel no disponible: {_ex_xlsx}")
 
     # ── Resumen Mensual ───────────────────────────────────────────────────────
     st.markdown("---")
@@ -834,14 +900,12 @@ with tab_dash:
         } for c in cierres])
         st.dataframe(df_cierres, use_container_width=True, hide_index=True)
 
-    st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TAB 2 — EVENTOS  (fondo verde clarito)
 # ─────────────────────────────────────────────────────────────────────────────
 with tab_eventos:
-    st.markdown('<div class="bg-eventos">', unsafe_allow_html=True)
     st.markdown("### 🎉 Local de Eventos")
 
     # ── Calendario de disponibilidad ──────────────────────────────────────────
@@ -861,22 +925,16 @@ with tab_eventos:
     if "fecha_presel" not in st.session_state:
         st.session_state.fecha_presel = None
 
-    col_prev, col_mes_label, col_next = st.columns([1, 4, 1])
+    col_prev, col_next = st.columns(2)
     with col_prev:
-        if st.button("◀", key="cal_prev"):
+        if st.button("◀ Mes anterior", key="cal_prev", use_container_width=True):
             if st.session_state.cal_mes == 1:
                 st.session_state.cal_mes = 12
                 st.session_state.cal_anio -= 1
             else:
                 st.session_state.cal_mes -= 1
-    with col_mes_label:
-        st.markdown(
-            f"<div style='text-align:center;font-weight:600;color:#1e40af;font-size:1rem;padding-top:6px'>"
-            f"{MESES_ES[st.session_state.cal_mes-1]} {st.session_state.cal_anio}</div>",
-            unsafe_allow_html=True,
-        )
     with col_next:
-        if st.button("▶", key="cal_next"):
+        if st.button("Mes siguiente ▶", key="cal_next", use_container_width=True):
             if st.session_state.cal_mes == 12:
                 st.session_state.cal_mes = 1
                 st.session_state.cal_anio += 1
@@ -944,6 +1002,13 @@ with tab_eventos:
         m1.metric("Saldo Pendiente", fmt_mxn(saldo))
         m2.metric("Utilidad neta", fmt_mxn(utilidad_monto))
         m3.metric("% sobre costo", f"{pct_display:.1f}%")
+
+        if utilidad_monto > costo_total > 0:
+            st.warning(
+                f"⚠️ La utilidad neta ({fmt_mxn(utilidad_monto)}) es mayor que el costo "
+                f"total del evento ({fmt_mxn(costo_total)}). Revisa si capturaste el "
+                f"monto correcto — la utilidad debería ser una parte del costo total, no más."
+            )
 
         cs, cd = st.columns([3, 1])
         with cs:
@@ -1116,14 +1181,12 @@ with tab_eventos:
                 except Exception as ex:
                     st.error(f"Error al generar el PDF: {ex}")
 
-    st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TAB 3 — RENTAS  (fondo morado lavanda)
 # ─────────────────────────────────────────────────────────────────────────────
 with tab_rentas:
-    st.markdown('<div class="bg-rentas">', unsafe_allow_html=True)
     st.markdown("### 🏠 Control de Rentas")
 
     todas_rentas = _c_rentas()
@@ -1141,21 +1204,15 @@ with tab_rentas:
     if "rcal_mes" not in st.session_state:
         st.session_state.rcal_mes = date.today().month
 
-    col_rp, col_rm, col_rn = st.columns([1, 4, 1])
+    col_rp, col_rn = st.columns(2)
     with col_rp:
-        if st.button("◀", key="rcal_prev"):
+        if st.button("◀ Mes anterior", key="rcal_prev", use_container_width=True):
             if st.session_state.rcal_mes == 1:
                 st.session_state.rcal_mes = 12; st.session_state.rcal_anio -= 1
             else:
                 st.session_state.rcal_mes -= 1
-    with col_rm:
-        st.markdown(
-            f"<div style='text-align:center;font-weight:700;color:#7e22ce;"
-            f"font-size:1.05rem;padding-top:6px'>"
-            f"{MESES_ES[st.session_state.rcal_mes-1]} {st.session_state.rcal_anio}</div>",
-            unsafe_allow_html=True)
     with col_rn:
-        if st.button("▶", key="rcal_next"):
+        if st.button("Mes siguiente ▶", key="rcal_next", use_container_width=True):
             if st.session_state.rcal_mes == 12:
                 st.session_state.rcal_mes = 1; st.session_state.rcal_anio += 1
             else:
@@ -1282,14 +1339,12 @@ with tab_rentas:
         with k3: kpi("Atrasado", fmt_mxn(atrasadas), "Venció sin pago", "orange")
     else:
         st.info("No hay rentas registradas aún.")
-    st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TAB 4 — AUTOS
 # ─────────────────────────────────────────────────────────────────────────────
 with tab_autos:
-    st.markdown('<div class="bg-rentas">', unsafe_allow_html=True)
     st.markdown("## 🚗 Utilidad por Venta de Autos")
 
     # ── Formulario ────────────────────────────────────────────────────────────
@@ -1376,14 +1431,12 @@ with tab_autos:
         )
     else:
         st.info("No hay ventas registradas aún.")
-    st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TAB 5 — FACTURACIONES
 # ─────────────────────────────────────────────────────────────────────────────
 with tab_fact:
-    st.markdown('<div class="bg-eventos">', unsafe_allow_html=True)
     st.markdown("## 🧾 Facturaciones")
 
     # ── Formulario ────────────────────────────────────────────────────────────
@@ -1468,7 +1521,6 @@ with tab_fact:
         )
     else:
         st.info("No hay facturaciones registradas aún.")
-    st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1477,7 +1529,6 @@ with tab_fact:
 MODULOS_GASTO = ["Eventos", "Rentas", "Autos", "Facturaciones", "General"]
 
 with tab_gastos:
-    st.markdown('<div class="bg-rentas">', unsafe_allow_html=True)
     st.markdown("## 💸 Gastos")
 
     with st.expander("➕ Registrar / Editar Gasto", expanded=False):
@@ -1562,26 +1613,42 @@ with tab_gastos:
             st.bar_chart(pd.DataFrame(list(g_by_mod.items()), columns=["Módulo", "Total"]).set_index("Módulo"))
     else:
         st.info("No hay gastos registrados aún. Registra mantenimientos, insumos y otros costos aquí.")
-    st.markdown('</div>', unsafe_allow_html=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TAB 7 — HISTORIAL  (fondo amarillo claro)
 # ─────────────────────────────────────────────────────────────────────────────
 with tab_hist:
-    st.markdown('<div class="bg-hist">', unsafe_allow_html=True)
     st.markdown("### 📋 Historial de Cambios")
     st.caption("Registro automático de cada modificación — quién, qué, cuándo.")
+
+    from zoneinfo import ZoneInfo
+    HERMOSILLO_TZ = ZoneInfo("America/Hermosillo")
+
+    def _fmt_fecha_hist(fecha_str):
+        if not fecha_str:
+            return "—"
+        try:
+            f = fecha_str.replace("Z", "+00:00")
+            dt = datetime.fromisoformat(f)
+            if dt.tzinfo is not None:
+                dt = dt.astimezone(HERMOSILLO_TZ)
+            return dt.strftime("%d/%m/%Y %I:%M %p")
+        except Exception:
+            return fecha_str
 
     historial = _c_historial()
     if historial:
         df_h = pd.DataFrame(historial)[["fecha", "usuario", "modulo", "accion", "detalle"]]
         df_h.columns = ["Fecha", "Usuario", "Módulo", "Acción", "Detalle"]
+        df_h["Fecha"] = df_h["Fecha"].apply(_fmt_fecha_hist)
 
         # Filtros rápidos
         fc1, fc2 = st.columns(2)
         with fc1:
-            mod_fil = st.multiselect("Filtrar por módulo", ["Eventos", "Rentas", "Autos", "Facturaciones"], default=["Eventos", "Rentas", "Autos", "Facturaciones"])
+            mod_fil = st.multiselect("Filtrar por módulo",
+                ["Eventos", "Rentas", "Autos", "Facturaciones", "Gastos", "Dashboard"],
+                default=["Eventos", "Rentas", "Autos", "Facturaciones", "Gastos", "Dashboard"])
         with fc2:
             usr_fil = st.text_input("Filtrar por usuario", placeholder="Escribe un nombre...")
 
@@ -1593,4 +1660,3 @@ with tab_hist:
         st.caption(f"Mostrando {len(df_f)} de {len(df_h)} registros")
     else:
         st.info("Aún no hay cambios registrados. Cada vez que alguien guarde o elimine algo, aparecerá aquí.")
-    st.markdown('</div>', unsafe_allow_html=True)

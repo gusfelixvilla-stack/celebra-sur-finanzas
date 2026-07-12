@@ -172,6 +172,34 @@ def init_db():
                 notas TEXT,
                 created_at TEXT DEFAULT (datetime('now','localtime'))
             );
+            CREATE TABLE IF NOT EXISTS autos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fecha TEXT NOT NULL,
+                unidad TEXT NOT NULL,
+                costo REAL NOT NULL DEFAULT 0,
+                utilidad REAL NOT NULL DEFAULT 0,
+                tipo TEXT NOT NULL DEFAULT 'Propio',
+                notas TEXT,
+                created_at TEXT DEFAULT (datetime('now','localtime'))
+            );
+            CREATE TABLE IF NOT EXISTS facturaciones (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                fecha TEXT NOT NULL,
+                cliente TEXT NOT NULL,
+                unidad TEXT,
+                tipo TEXT NOT NULL DEFAULT 'Crédito',
+                monto REAL NOT NULL DEFAULT 0,
+                notas TEXT,
+                created_at TEXT DEFAULT (datetime('now','localtime'))
+            );
+            CREATE TABLE IF NOT EXISTS cierres_mensuales (
+                anio_mes TEXT PRIMARY KEY,
+                eventos REAL NOT NULL DEFAULT 0,
+                rentas REAL NOT NULL DEFAULT 0,
+                autos REAL NOT NULL DEFAULT 0,
+                facturaciones REAL NOT NULL DEFAULT 0,
+                notas TEXT
+            );
         """)
     finally:
         conn.close()
