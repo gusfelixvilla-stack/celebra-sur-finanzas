@@ -409,16 +409,27 @@ def ingresos_del_dia(dia: date):
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# TABS
+# TABS — controladas por session_state para poder saltar de una a otra
+# desde botones (ej. "Modificar →" en las alertas del Dashboard)
 # ══════════════════════════════════════════════════════════════════════════════
-tab_dash, tab_eventos, tab_rentas, tab_autos, tab_fact, tab_gastos, tab_hist = st.tabs(
-    ["📊 Dashboard", "🎉 Eventos", "🏠 Rentas", "🚗 Autos", "🧾 Facturaciones", "💸 Gastos", "📋 Historial"]
+NOMBRES_TABS = ["📊 Dashboard", "🎉 Eventos", "🏠 Rentas", "🚗 Autos", "🧾 Facturaciones", "💸 Gastos", "📋 Historial"]
+if "tab_activa" not in st.session_state:
+    st.session_state.tab_activa = NOMBRES_TABS[0]
+# "_pending_tab" se aplica ANTES de dibujar el control, porque Streamlit no
+# permite modificar session_state de un widget después de instanciarlo.
+if "_pending_tab" in st.session_state:
+    st.session_state["tab_activa"] = st.session_state.pop("_pending_tab")
+
+tab_sel = st.segmented_control(
+    "Navegación", NOMBRES_TABS, key="tab_activa", label_visibility="collapsed"
 )
+if tab_sel is None:
+    tab_sel = NOMBRES_TABS[0]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # TAB 1 — DASHBOARD  (fondo azul cielo)
 # ─────────────────────────────────────────────────────────────────────────────
-with tab_dash:
+if tab_sel == "📊 Dashboard":
 
     # ── Datos globales ────────────────────────────────────────────────────────
     todos_ev    = _c_eventos()
@@ -470,32 +481,65 @@ with tab_dash:
     utilidad_neta_mes   = total_ingresos_mes - total_gastos_mes
 
     # ── Alertas automáticas ──────────────────────────────────────────────────
+    # Cada alerta guarda a qué registro/módulo lleva, para poder saltar
+    # directo a modificarlo con un botón ("Modificar →").
     _alertas = []
     for _r in todas_rent:
         if not _r["fecha_ingreso_real"]:
             _est_r = estatus_renta(_r["fecha_vencimiento"], None)
             if _est_r == "Atrasado":
-                _alertas.append(f"🔴 <b>{_r['propiedad']}</b> — renta vencida el {_r['fecha_vencimiento']} ({fmt_mxn(_r['monto_renta'])})")
+                _alertas.append({
+                    "texto": f"🔴 <b>{_r['propiedad']}</b> — renta vencida el {_r['fecha_vencimiento']} ({fmt_mxn(_r['monto_renta'])})",
+                    "tipo": "renta", "id": _r["id"],
+                })
             elif _est_r == "Pendiente":
                 _dias_r = (date.fromisoformat(_r["fecha_vencimiento"]) - date.today()).days
                 if _dias_r <= 5:
-                    _alertas.append(f"🟡 <b>{_r['propiedad']}</b> — renta vence en {_dias_r} días ({fmt_mxn(_r['monto_renta'])})")
+                    _alertas.append({
+                        "texto": f"🟡 <b>{_r['propiedad']}</b> — renta vence en {_dias_r} días ({fmt_mxn(_r['monto_renta'])})",
+                        "tipo": "renta", "id": _r["id"],
+                    })
     for _e in todos_ev:
         if _e["estatus"] == "Apartado" and _e.get("fecha_evento"):
             _dias_e = (date.fromisoformat(_e["fecha_evento"]) - date.today()).days
             _saldo_e = _e["costo_total"] - _e["monto_apartado"]
             if _saldo_e > 0:
                 if -7 <= _dias_e < 0:
-                    _alertas.append(f"🔴 <b>{_e['concepto']}</b> — evento hace {-_dias_e}d, saldo pendiente {fmt_mxn(_saldo_e)}")
+                    _alertas.append({
+                        "texto": f"🔴 <b>{_e['concepto']}</b> — evento hace {-_dias_e}d, saldo pendiente {fmt_mxn(_saldo_e)}",
+                        "tipo": "evento", "id": _e["id"],
+                    })
                 elif 0 <= _dias_e <= 3:
-                    _alertas.append(f"🟡 <b>{_e['concepto']}</b> — evento en {_dias_e}d, cobrar saldo {fmt_mxn(_saldo_e)}")
+                    _alertas.append({
+                        "texto": f"🟡 <b>{_e['concepto']}</b> — evento en {_dias_e}d, cobrar saldo {fmt_mxn(_saldo_e)}",
+                        "tipo": "evento", "id": _e["id"],
+                    })
     if _alertas:
         st.markdown(
-            f"""<div style="background:#fef2f2;border:1.5px solid #fca5a5;border-radius:12px;
-            padding:14px 18px;margin-bottom:16px;">
-            <b style="color:#991b1b;">⚠️ Alertas</b><br>
-            {"<br>".join(_alertas)}
+            """<div style="background:#fef2f2;border:1.5px solid #fca5a5;border-radius:12px 12px 0 0;
+            padding:14px 18px 4px 18px;">
+            <b style="color:#991b1b;">⚠️ Alertas</b>
             </div>""", unsafe_allow_html=True)
+        st.markdown(
+            '<div style="background:#fef2f2;border:1.5px solid #fca5a5;border-top:none;'
+            'padding:2px 18px 14px 18px;margin-bottom:16px;">',
+            unsafe_allow_html=True,
+        )
+        for _i, _al in enumerate(_alertas):
+            _ac1, _ac2 = st.columns([5, 1.3])
+            with _ac1:
+                st.markdown(f"<div style='padding-top:6px'>{_al['texto']}</div>", unsafe_allow_html=True)
+            with _ac2:
+                if st.button("Modificar →", key=f"alerta_ir_{_al['tipo']}_{_al['id']}_{_i}",
+                              use_container_width=True):
+                    if _al["tipo"] == "renta":
+                        st.session_state["_jump_renta_id"] = _al["id"]
+                        st.session_state["_pending_tab"] = "🏠 Rentas"
+                    else:
+                        st.session_state["_jump_evento_id"] = _al["id"]
+                        st.session_state["_pending_tab"] = "🎉 Eventos"
+                    st.rerun()
+        st.markdown("</div>", unsafe_allow_html=True)
 
     # ── Banner de utilidad neta — cambia entre "Este mes" y "Acumulado" ───────
     vista_banner = st.radio(
@@ -905,7 +949,7 @@ with tab_dash:
 # ─────────────────────────────────────────────────────────────────────────────
 # TAB 2 — EVENTOS  (fondo verde clarito)
 # ─────────────────────────────────────────────────────────────────────────────
-with tab_eventos:
+if tab_sel == "🎉 Eventos":
     st.markdown("### 🎉 Local de Eventos")
 
     # ── Calendario de disponibilidad ──────────────────────────────────────────
@@ -956,9 +1000,14 @@ with tab_eventos:
     st.markdown("---")
 
     # ── Formulario ────────────────────────────────────────────────────────────
-    with st.expander("➕ Registrar / Editar Evento", expanded=False):
+    _jump_ev_id = st.session_state.pop("_jump_evento_id", None)
+    with st.expander("➕ Registrar / Editar Evento", expanded=bool(_jump_ev_id)):
         eventos_lista = _c_eventos()
         opciones = ["Nuevo Evento"] + [f"#{e['id']} – {e['concepto']} ({e['fecha_evento']})" for e in eventos_lista]
+        if _jump_ev_id:
+            _match_ev = next((o for o in opciones if o.startswith(f"#{_jump_ev_id} –")), None)
+            if _match_ev:
+                st.session_state["ev_sel"] = _match_ev
         sel = st.selectbox("Seleccionar", opciones, key="ev_sel")
 
         ev, edit_id = {}, None
@@ -1186,7 +1235,7 @@ with tab_eventos:
 # ─────────────────────────────────────────────────────────────────────────────
 # TAB 3 — RENTAS  (fondo morado lavanda)
 # ─────────────────────────────────────────────────────────────────────────────
-with tab_rentas:
+if tab_sel == "🏠 Rentas":
     st.markdown("### 🏠 Control de Rentas")
 
     todas_rentas = _c_rentas()
@@ -1243,12 +1292,17 @@ with tab_rentas:
     st.markdown("---")
 
     # ── Formulario ────────────────────────────────────────────────────────────
-    with st.expander("➕ Registrar / Editar Renta", expanded=False):
+    _jump_r_id = st.session_state.pop("_jump_renta_id", None)
+    with st.expander("➕ Registrar / Editar Renta", expanded=bool(_jump_r_id)):
         rentas_lista = _c_rentas()
         opciones_r = ["Nueva Renta"] + [
             f"#{r['id']} – {r['propiedad']} ({r.get('fecha_inicio','?')} → {r['fecha_vencimiento']})"
             for r in rentas_lista
         ]
+        if _jump_r_id:
+            _match_r = next((o for o in opciones_r if o.startswith(f"#{_jump_r_id} –")), None)
+            if _match_r:
+                st.session_state["r_sel"] = _match_r
         sel_r = st.selectbox("Seleccionar registro", opciones_r, key="r_sel")
 
         r, rent_id = {}, None
@@ -1344,7 +1398,7 @@ with tab_rentas:
 # ─────────────────────────────────────────────────────────────────────────────
 # TAB 4 — AUTOS
 # ─────────────────────────────────────────────────────────────────────────────
-with tab_autos:
+if tab_sel == "🚗 Autos":
     st.markdown("## 🚗 Utilidad por Venta de Autos")
 
     # ── Formulario ────────────────────────────────────────────────────────────
@@ -1436,7 +1490,7 @@ with tab_autos:
 # ─────────────────────────────────────────────────────────────────────────────
 # TAB 5 — FACTURACIONES
 # ─────────────────────────────────────────────────────────────────────────────
-with tab_fact:
+if tab_sel == "🧾 Facturaciones":
     st.markdown("## 🧾 Facturaciones")
 
     # ── Formulario ────────────────────────────────────────────────────────────
@@ -1528,7 +1582,7 @@ with tab_fact:
 # ─────────────────────────────────────────────────────────────────────────────
 MODULOS_GASTO = ["Eventos", "Rentas", "Autos", "Facturaciones", "General"]
 
-with tab_gastos:
+if tab_sel == "💸 Gastos":
     st.markdown("## 💸 Gastos")
 
     with st.expander("➕ Registrar / Editar Gasto", expanded=False):
@@ -1618,7 +1672,7 @@ with tab_gastos:
 # ─────────────────────────────────────────────────────────────────────────────
 # TAB 7 — HISTORIAL  (fondo amarillo claro)
 # ─────────────────────────────────────────────────────────────────────────────
-with tab_hist:
+if tab_sel == "📋 Historial":
     st.markdown("### 📋 Historial de Cambios")
     st.caption("Registro automático de cada modificación — quién, qué, cuándo.")
 
