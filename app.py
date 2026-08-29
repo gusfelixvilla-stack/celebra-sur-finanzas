@@ -9,6 +9,7 @@ from database import (
     get_facturaciones, save_facturacion, delete_facturacion,
     get_cierres, save_cierre, delete_cierre,
     get_gastos, save_gasto, delete_gasto,
+    get_patrimonio, save_patrimonio, delete_patrimonio,
 )
 from contract import generar_contrato
 
@@ -36,9 +37,12 @@ def _c_cierres(): return get_cierres()
 @st.cache_data(ttl=60)
 def _c_gastos(): return get_gastos()
 
+@st.cache_data(ttl=60)
+def _c_patrimonio(): return get_patrimonio()
+
 def _clear_cache():
     for fn in [_c_eventos, _c_rentas, _c_autos, _c_facturaciones,
-               _c_historial, _c_cierres, _c_gastos]:
+               _c_historial, _c_cierres, _c_gastos, _c_patrimonio]:
         fn.clear()
 
 st.set_page_config(
@@ -169,6 +173,11 @@ usuario_activo = st.session_state.usuario.strip() or "Anónimo"
 def fmt_mxn(n):
     if n is None: return "$0"
     return f"${n:,.0f}"
+
+
+def fmt_md(n):
+    """Igual que fmt_mxn pero seguro dentro de texto markdown (evita modo LaTeX)."""
+    return fmt_mxn(n).replace("$", "\\$")
 
 
 def estatus_renta(fecha_vencimiento: str, fecha_ingreso):
@@ -412,7 +421,7 @@ def ingresos_del_dia(dia: date):
 # TABS — controladas por session_state para poder saltar de una a otra
 # desde botones (ej. "Modificar →" en las alertas del Dashboard)
 # ══════════════════════════════════════════════════════════════════════════════
-NOMBRES_TABS = ["📊 Dashboard", "🎉 Eventos", "🏠 Rentas", "🚗 Autos", "🧾 Facturaciones", "💸 Gastos", "📋 Historial"]
+NOMBRES_TABS = ["📊 Dashboard", "🎉 Eventos", "🏠 Rentas", "🚗 Autos", "🧾 Facturaciones", "💸 Gastos", "🏦 Patrimonio", "📋 Historial"]
 if "tab_activa" not in st.session_state:
     st.session_state.tab_activa = NOMBRES_TABS[0]
 # "_pending_tab" se aplica ANTES de dibujar el control, porque Streamlit no
@@ -1670,7 +1679,204 @@ if tab_sel == "💸 Gastos":
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# TAB 7 — HISTORIAL  (fondo amarillo claro)
+# TAB 7 — PATRIMONIO  (activos, deudas y ratio de liquidez)
+# ─────────────────────────────────────────────────────────────────────────────
+CAT_ACTIVOS = ["Efectivo y bancos", "Inversiones", "Inmuebles",
+               "Vehículos", "Inventario / negocio", "Otros activos"]
+CAT_PASIVOS = ["Hipoteca", "Crédito automotriz", "Tarjetas de crédito",
+               "Préstamos", "Otros pasivos"]
+CAT_LIQUIDAS = {"Efectivo y bancos", "Inversiones"}
+
+
+def por_cobrar_eventos():
+    """Saldo contratado y aún no cobrado de los eventos apartados."""
+    return sum(
+        max(0.0, (e.get("costo_total") or 0) - (e.get("monto_apartado") or 0))
+        for e in _c_eventos() if e.get("estatus") != "Liquidado"
+    )
+
+
+if tab_sel == "🏦 Patrimonio":
+    st.markdown("## 🏦 Patrimonio y Liquidez")
+
+    registros = _c_patrimonio()
+    activos = [r for r in registros if r.get("tipo") == "Activo"]
+    pasivos = [r for r in registros if r.get("tipo") == "Pasivo"]
+
+    cxc = por_cobrar_eventos()
+    total_activos = sum(r.get("monto") or 0 for r in activos) + cxc
+    total_pasivos = sum(r.get("monto") or 0 for r in pasivos)
+    patrimonio_neto = total_activos - total_pasivos
+    liquidez = sum(r.get("monto") or 0 for r in activos if r.get("liquido"))
+    liquidez_ampl = liquidez + cxc
+
+    if patrimonio_neto > 0:
+        ratio = liquidez / patrimonio_neto * 100
+        ratio_ampl = liquidez_ampl / patrimonio_neto * 100
+        ratio_txt = f"{ratio:.1f}%"
+        ratio_sub = f"Con cuentas por cobrar: {ratio_ampl:.1f}%"
+        color_ratio = "green" if ratio >= 20 else ("yellow" if ratio >= 10 else "orange")
+    else:
+        ratio = None
+        ratio_txt = "—"
+        ratio_sub = "Falta capturar activos"
+        color_ratio = "blue"
+
+    k1, k2, k3, k4 = st.columns(4)
+    with k1: kpi("Activos totales", fmt_mxn(total_activos),
+                 f"Incluye {fmt_mxn(cxc)} por cobrar", "blue")
+    with k2: kpi("Deudas totales", fmt_mxn(total_pasivos),
+                 f"{len(pasivos)} registro(s)", "orange")
+    with k3: kpi("Patrimonio neto", fmt_mxn(patrimonio_neto),
+                 "Activos − deudas", "purple")
+    with k4: kpi("Liquidez / Patrimonio", ratio_txt, ratio_sub, color_ratio)
+
+    # ── Lectura del ratio ─────────────────────────────────────────────────────
+    if ratio is None:
+        st.info("Captura abajo tu efectivo, propiedades y deudas para ver el ratio.")
+    else:
+        if ratio >= 20:
+            st.success(
+                f"**Ratio sano ({ratio_txt}).** Tienes {fmt_md(liquidez)} disponibles "
+                f"de un patrimonio de {fmt_md(patrimonio_neto)}. Buen colchón para "
+                "aguantar un mes flojo o aprovechar una oportunidad."
+            )
+        elif ratio >= 10:
+            st.warning(
+                f"**Ratio ajustado ({ratio_txt}).** Tu patrimonio está sano pero casi todo "
+                "atorado en cosas que no se venden rápido. Si se cae un pago fuerte, "
+                "andarías apretado."
+            )
+        else:
+            st.error(
+                f"**Ratio bajo ({ratio_txt}).** Solo {fmt_md(liquidez)} líquidos contra "
+                f"{fmt_md(patrimonio_neto)} de patrimonio. Estás rico en papel pero corto "
+                "de efectivo: cualquier imprevisto te obliga a vender algo o endeudarte."
+            )
+        st.caption(
+            "Referencia: 20% o más es holgado, 10–20% es manejable, menos de 10% es riesgoso "
+            "para un negocio con inventario y gastos fijos."
+        )
+
+    # ── Desglose ──────────────────────────────────────────────────────────────
+    cA, cP = st.columns(2)
+    with cA:
+        st.markdown("#### 💚 Activos")
+        filas_a = [{
+            "Concepto": "Por cobrar de eventos",
+            "Categoría": "Cuentas por cobrar",
+            "Monto": fmt_mxn(cxc),
+            "Líquido": "Sí (al cobrarse)",
+        }] if cxc else []
+        filas_a += [{
+            "Concepto": r.get("nombre"),
+            "Categoría": r.get("categoria"),
+            "Monto": fmt_mxn(r.get("monto")),
+            "Líquido": "Sí" if r.get("liquido") else "No",
+        } for r in activos]
+        if filas_a:
+            st.dataframe(pd.DataFrame(filas_a), use_container_width=True, hide_index=True)
+        else:
+            st.info("Sin activos capturados.")
+
+    with cP:
+        st.markdown("#### 🔴 Deudas")
+        if pasivos:
+            st.dataframe(pd.DataFrame([{
+                "Concepto": r.get("nombre"),
+                "Categoría": r.get("categoria"),
+                "Saldo": fmt_mxn(r.get("monto")),
+                "Notas": r.get("notas") or "—",
+            } for r in pasivos]), use_container_width=True, hide_index=True)
+        else:
+            st.info("Sin deudas capturadas.")
+
+    # ── Formulario ────────────────────────────────────────────────────────────
+    with st.expander("➕ Registrar / Editar activo o deuda", expanded=not registros):
+        opciones_p = ["Nuevo registro"] + [
+            f"#{r['id']} – {r['nombre']} ({r['tipo']})" for r in registros
+        ]
+        sel_p = st.selectbox("Seleccionar registro", opciones_p, key="p_sel")
+        pat_id = None
+        r = {}
+        if sel_p != "Nuevo registro":
+            pat_id = int(sel_p.split("–")[0].replace("#", "").strip())
+            r = next((x for x in registros if x["id"] == pat_id), {})
+
+        # Las llaves llevan el id del registro: así, al cambiar de registro,
+        # los campos se recargan con SUS valores en vez de conservar los previos.
+        sfx = f"_{pat_id}" if pat_id else "_new"
+
+        tipo_p = st.radio("Tipo", ["Activo", "Pasivo"],
+                          index=0 if r.get("tipo", "Activo") == "Activo" else 1,
+                          horizontal=True, key=f"p_tipo{sfx}",
+                          help="Activo = algo que tienes. Pasivo = algo que debes.")
+        cats = CAT_ACTIVOS if tipo_p == "Activo" else CAT_PASIVOS
+
+        col1, col2 = st.columns(2)
+        with col1:
+            categoria_p = st.selectbox(
+                "Categoría", cats,
+                index=cats.index(r["categoria"]) if r.get("categoria") in cats else 0,
+                key=f"p_cat{sfx}")
+            nombre_p = st.text_input(
+                "Concepto (ej. Cuenta BBVA, Casa San Carlos)",
+                value=r.get("nombre", ""), key=f"p_nombre{sfx}")
+        with col2:
+            monto_p = st.number_input(
+                "Valor actual ($)" if tipo_p == "Activo" else "Saldo que debes ($)",
+                min_value=0.0, value=float(r.get("monto", 0)), step=1000.0, key=f"p_monto{sfx}")
+            notas_p = st.text_input("Notas", value=r.get("notas") or "", key=f"p_notas{sfx}")
+
+        if tipo_p == "Activo":
+            liquido_p = st.checkbox(
+                "Lo puedo convertir en efectivo en menos de 30 días",
+                value=bool(r.get("liquido")) if r else categoria_p in CAT_LIQUIDAS,
+                key=f"p_liquido{sfx}",
+                help="Marca esto solo para dinero en bancos, inversiones a la vista "
+                     "y cosas que realmente venderías en un mes.")
+        else:
+            liquido_p = False
+
+        cp1, cp2 = st.columns(2)
+        with cp1:
+            if st.button("💾 Guardar", use_container_width=True, key="p_save"):
+                if not nombre_p.strip():
+                    st.error("Ponle un concepto al registro.")
+                else:
+                    payload_p = {
+                        "tipo": tipo_p,
+                        "categoria": categoria_p,
+                        "nombre": nombre_p.strip(),
+                        "monto": monto_p,
+                        "liquido": liquido_p,
+                        "notas": notas_p or None,
+                    }
+                    nuevo_pid = save_patrimonio(payload_p, pat_id)
+                    log_accion(usuario_activo,
+                               "Editó patrimonio" if pat_id else "Registró patrimonio",
+                               "Patrimonio", f"{tipo_p}: {nombre_p} — {fmt_mxn(monto_p)}",
+                               referencia_id=nuevo_pid, referencia_tabla="patrimonio")
+                    st.success("Guardado ✓")
+                    _clear_cache(); st.rerun()
+        with cp2:
+            if pat_id and st.button("🗑️ Eliminar", use_container_width=True, key="p_del"):
+                log_accion(usuario_activo, "Eliminó patrimonio", "Patrimonio",
+                           f"#{pat_id} {r.get('nombre')}",
+                           referencia_id=pat_id, referencia_tabla="patrimonio")
+                delete_patrimonio(pat_id)
+                st.warning("Eliminado.")
+                _clear_cache(); st.rerun()
+
+    st.caption(
+        "ℹ️ El saldo por cobrar de eventos se toma solo de la pestaña Eventos y se actualiza "
+        "automáticamente. Todo lo demás (efectivo, casas, jardín, autos personales y deudas) "
+        "se captura aquí a mano — actualízalo cada vez que cambie algo grande."
+    )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# TAB 8 — HISTORIAL  (fondo amarillo claro)
 # ─────────────────────────────────────────────────────────────────────────────
 if tab_sel == "📋 Historial":
     st.markdown("### 📋 Historial de Cambios")

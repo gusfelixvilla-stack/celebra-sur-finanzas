@@ -192,6 +192,16 @@ def init_db():
                 notas TEXT,
                 created_at TEXT DEFAULT (datetime('now','localtime'))
             );
+            CREATE TABLE IF NOT EXISTS patrimonio (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tipo TEXT NOT NULL DEFAULT 'Activo',
+                categoria TEXT NOT NULL DEFAULT 'Otros',
+                nombre TEXT NOT NULL,
+                monto REAL NOT NULL DEFAULT 0,
+                liquido INTEGER NOT NULL DEFAULT 0,
+                notas TEXT,
+                created_at TEXT DEFAULT (datetime('now','localtime'))
+            );
             CREATE TABLE IF NOT EXISTS cierres_mensuales (
                 anio_mes TEXT PRIMARY KEY,
                 eventos REAL NOT NULL DEFAULT 0,
@@ -378,6 +388,59 @@ def delete_auto(auto_id):
         conn = get_conn()
         try:
             conn.execute("DELETE FROM autos WHERE id=?", (auto_id,)); conn.commit()
+        finally:
+            conn.close()
+
+
+# ── Patrimonio (activos y pasivos) ────────────────────────────────────────────
+
+_PATRIMONIO_COLS = ["tipo", "categoria", "nombre", "monto", "liquido", "notas"]
+
+
+def get_patrimonio():
+    if _use_supabase():
+        return _sb_get("patrimonio", order="monto.desc") or []
+    conn = get_conn()
+    try:
+        return [dict(x) for x in conn.execute(
+            "SELECT * FROM patrimonio ORDER BY monto DESC").fetchall()]
+    finally:
+        conn.close()
+
+
+def save_patrimonio(data: dict, pat_id=None):
+    payload = {k: data.get(k) for k in _PATRIMONIO_COLS}
+    payload["liquido"] = bool(payload.get("liquido"))
+    if _use_supabase():
+        if pat_id:
+            _sb_update("patrimonio", payload, "id", pat_id)
+            return pat_id
+        return _sb_insert("patrimonio", payload)
+    payload["liquido"] = int(payload["liquido"])
+    conn = get_conn()
+    try:
+        if pat_id:
+            conn.execute(
+                "UPDATE patrimonio SET tipo=?,categoria=?,nombre=?,monto=?,liquido=?,notas=? WHERE id=?",
+                (*payload.values(), pat_id))
+            conn.commit()
+            return pat_id
+        cur = conn.execute(
+            "INSERT INTO patrimonio (tipo,categoria,nombre,monto,liquido,notas) VALUES (?,?,?,?,?,?)",
+            tuple(payload.values()))
+        conn.commit()
+        return cur.lastrowid
+    finally:
+        conn.close()
+
+
+def delete_patrimonio(pat_id):
+    if _use_supabase():
+        _sb_delete("patrimonio", "id", pat_id)
+    else:
+        conn = get_conn()
+        try:
+            conn.execute("DELETE FROM patrimonio WHERE id=?", (pat_id,)); conn.commit()
         finally:
             conn.close()
 
