@@ -61,6 +61,16 @@ def _c_historico_ingresos():
     return pd.read_csv(ruta)
 
 @st.cache_data
+def _c_gastos_negocio():
+    ruta = Path(__file__).parent / "data" / "gastos_negocio.csv"
+    return pd.read_csv(ruta) if ruta.exists() else None
+
+@st.cache_data
+def _c_autos_resumen_anual():
+    ruta = Path(__file__).parent / "data" / "autos_resumen_anual.csv"
+    return pd.read_csv(ruta) if ruta.exists() else None
+
+@st.cache_data
 def _c_historico_meses():
     ruta = Path(__file__).parent / "data" / "historico_autos_meses.csv"
     if not ruta.exists():
@@ -1440,9 +1450,11 @@ if tab_sel == "🏠 Rentas":
     else:
         _ai = sorted(ing["anio"].unique())
         st.caption(
-            f"{len(ing)} registros de {_ai[0]} a {_ai[-1]}, tomados de los bloques de ingresos "
-            "del Excel AUTO FACIL. Solo aparecen los meses en que se anotaron: que un mes no "
-            "salga no quiere decir que no haya entrado renta, sino que no quedó escrita."
+            f"{len(ing)} registros de {_ai[0]} a {_ai[-1]}. De 2023 a 2025 salen del "
+            "**AUTO FACIL ANUAL**, donde ya vienen separados por columna; el resto se "
+            "reconstruyó de los bloques de ingresos de las hojas mensuales. Solo aparecen los "
+            "meses en que quedaron anotados: que un mes no salga no quiere decir que no haya "
+            "entrado renta."
         )
 
         CATS = ["Casas", "Local", "Facturaciones", "Otros"]
@@ -1475,6 +1487,35 @@ if tab_sel == "🏠 Rentas":
             }),
             use_container_width=True, hide_index=True,
         )
+
+        # ── Ingresos contra gastos del negocio ────────────────────────────────
+        _g = _c_gastos_negocio()
+        if _g is not None and not _g.empty:
+            st.markdown("#### Otros ingresos contra los gastos del negocio")
+            _ig = ing.groupby("anio")["monto"].sum()
+            _gg = _g.groupby("anio")["gastos"].sum()
+            _aa = sorted(set(_ig.index) & set(_gg.index))
+            comp = pd.DataFrame({
+                "Otros ingresos": [_ig[a] for a in _aa],
+                "Gastos del negocio": [_gg[a] for a in _aa],
+            }, index=[str(a) for a in _aa])
+            # sin apilar: la gracia es comparar una barra contra la otra, no sumarlas
+            st.bar_chart(comp, height=300, color=["#16a34a", "#dc2626"], stack=False)
+            st.dataframe(
+                pd.DataFrame({
+                    "Año": comp.index,
+                    "Otros ingresos": comp["Otros ingresos"].map(fmt_mxn),
+                    "Gastos del negocio": comp["Gastos del negocio"].map(fmt_mxn),
+                    "Cubren": (comp["Otros ingresos"] / comp["Gastos del negocio"] * 100)
+                              .map(lambda x: f"{x:.0f}%"),
+                }),
+                use_container_width=True, hide_index=True,
+            )
+            st.caption(
+                "Los gastos vienen de la columna GASTOS del AUTO FACIL ANUAL (2021–2025). "
+                "«Cubren» es qué tanto de esos gastos alcanzan a pagar los otros ingresos, "
+                "sin contar lo que deja la venta de autos."
+            )
 
         # ── Comparativa de las casas, propiedad por propiedad ─────────────────
         st.markdown("#### Comparativa de las casas")
@@ -1540,6 +1581,7 @@ if tab_sel == "🏠 Rentas":
                     "Detalle":   det["detalle"],
                     "Monto":     det["monto"].map(fmt_mxn),
                     "Como venía en el Excel": det["etiqueta"].str.title(),
+                    "Fuente":    det["fuente"],
                 }),
                 use_container_width=True, hide_index=True,
             )
@@ -1735,6 +1777,36 @@ if tab_sel == "🚗 Autos":
                 }),
                 use_container_width=True, hide_index=True,
             )
+
+        with st.expander("🔎 Contraste con tu resumen AUTO FACIL ANUAL"):
+            _ra = _c_autos_resumen_anual()
+            if _ra is None or _ra.empty:
+                st.info("No se encontró `data/autos_resumen_anual.csv`.")
+            else:
+                ra = (_ra.groupby("anio")
+                         .agg(u_anual=("unidades", "sum"), v_anual=("venta", "sum"),
+                              e_anual=("utilidad", "sum")))
+                rc = (hist.groupby("anio")
+                          .agg(u_rec=("modelo", "size"), v_rec=("venta", "sum"),
+                               e_rec=("util_bruta_hoja", "sum")))
+                cmp_ = ra.join(rc, how="outer").fillna(0)
+                st.dataframe(
+                    pd.DataFrame({
+                        "Año":              cmp_.index.astype(str),
+                        "Unidades (tu resumen)":  cmp_["u_anual"].astype(int),
+                        "Unidades (reconstruido)": cmp_["u_rec"].astype(int),
+                        "Venta (tu resumen)":      cmp_["v_anual"].map(fmt_mxn),
+                        "Venta (reconstruido)":    cmp_["v_rec"].map(fmt_mxn),
+                        "Utilidad (tu resumen)":   cmp_["e_anual"].map(fmt_mxn),
+                        "Utilidad (reconstruido)": cmp_["e_rec"].map(fmt_mxn),
+                    }),
+                    use_container_width=True, hide_index=True,
+                )
+                st.caption(
+                    "La utilidad que se compara es la **bruta**, tal como viene anotada, porque "
+                    "así la lleva tu resumen anual. La de las gráficas de arriba es la neta, ya "
+                    "sin comisión ni gastos. 2026 no está en el resumen anual."
+                )
 
         with st.expander("🚙 Ver las unidades vendidas"):
             anio_u = st.selectbox("Año", _anios, index=len(_anios) - 1, key="hist_anio_u")
