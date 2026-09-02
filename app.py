@@ -1,6 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import date, datetime, timedelta
+from pathlib import Path
 from database import (
     init_db, USE_SUPABASE,
     log_accion, get_eventos, get_rentas, get_historial,
@@ -39,6 +40,15 @@ def _c_gastos(): return get_gastos()
 
 @st.cache_data(ttl=60)
 def _c_patrimonio(): return get_patrimonio()
+
+# Histórico de ventas de autos reconstruido del Excel AUTO FACIL (archivo estático,
+# no vive en Supabase para no mezclarse con los KPIs del mes en curso).
+@st.cache_data
+def _c_historico_autos():
+    ruta = Path(__file__).parent / "data" / "historico_autos.csv"
+    if not ruta.exists():
+        return None
+    return pd.read_csv(ruta)
 
 def _clear_cache():
     for fn in [_c_eventos, _c_rentas, _c_autos, _c_facturaciones,
@@ -1494,6 +1504,120 @@ if tab_sel == "🚗 Autos":
         )
     else:
         st.info("No hay ventas registradas aún.")
+
+    # ── Crecimiento histórico (Excel AUTO FACIL 2018–2022) ────────────────────
+    st.divider()
+    st.markdown("### 📈 Crecimiento histórico del lote")
+
+    hist = _c_historico_autos()
+    if hist is None or hist.empty:
+        st.info("No se encontró `data/historico_autos.csv`.")
+    else:
+        _anios = sorted(hist["anio"].unique())
+        st.caption(
+            f"{len(hist)} ventas de {_anios[0]} a {_anios[-1]}, reconstruidas del Excel AUTO FACIL. "
+            "Un auto vendido cuenta una sola vez aunque se repita en las hojas de los meses siguientes."
+        )
+
+        res = (hist.groupby("anio")
+                   .agg(Unidades=("modelo", "size"),
+                        Ventas=("venta", "sum"),
+                        Costo=("costo", "sum"),
+                        Utilidad=("util_neta_calc", "sum"),
+                        Meses=("mes", "nunique"))
+                   .reset_index())
+        res["Ticket"] = res["Ventas"] / res["Unidades"]
+        res["Margen"] = res["Utilidad"] / res["Ventas"] * 100
+
+        h1, h2, h3, h4 = st.columns(4)
+        with h1: kpi("Unidades vendidas", f"{int(res['Unidades'].sum()):,}",
+                     f"{_anios[0]}–{_anios[-1]}", "blue")
+        with h2: kpi("Ventas acumuladas", fmt_mxn(res["Ventas"].sum()), "Precio de venta", "purple")
+        with h3: kpi("Utilidad acumulada", fmt_mxn(res["Utilidad"].sum()),
+                     "Neta, ya sin comisión ni gastos", "green")
+        with h4: kpi("Margen promedio",
+                     f"{res['Utilidad'].sum() / res['Ventas'].sum() * 100:.1f}%",
+                     "Utilidad ÷ ventas", "orange")
+
+        cm1, cm2 = st.columns([2, 1])
+        with cm1:
+            metrica = st.radio(
+                "Métrica", ["Unidades vendidas", "Utilidad neta", "Ventas totales"],
+                horizontal=True, key="hist_metrica",
+            )
+        with cm2:
+            base = st.radio(
+                "Base", ["Total del año", "Promedio por mes"],
+                horizontal=True, key="hist_base",
+                help="2018 no tiene enero, 2020 no tiene enero–marzo y 2022 llega hasta mayo. "
+                     "El promedio por mes compara parejo.",
+            )
+
+        _col = {"Unidades vendidas": "Unidades", "Utilidad neta": "Utilidad",
+                "Ventas totales": "Ventas"}[metrica]
+        graf = res[["anio", _col, "Meses"]].copy()
+        if base == "Promedio por mes":
+            graf[_col] = graf[_col] / graf["Meses"]
+        graf["Año"] = graf["anio"].astype(str)
+        st.bar_chart(graf.set_index("Año")[[_col]], color="#1d4ed8", height=320)
+
+        _incompletos = [f"{int(r.anio)} ({int(r.Meses)} meses)"
+                        for r in res.itertuples() if r.Meses < 12]
+        if _incompletos:
+            st.caption("⚠️ Años incompletos en el Excel: " + " · ".join(_incompletos))
+
+        st.markdown("#### Resumen por año")
+        st.dataframe(
+            pd.DataFrame({
+                "Año":        res["anio"].astype(str),
+                "Meses":      res["Meses"],
+                "Unidades":   res["Unidades"],
+                "Ventas":     res["Ventas"].map(fmt_mxn),
+                "Costo":      res["Costo"].map(fmt_mxn),
+                "Utilidad":   res["Utilidad"].map(fmt_mxn),
+                "Ticket prom.": res["Ticket"].map(fmt_mxn),
+                "Margen":     res["Margen"].map(lambda x: f"{x:.1f}%"),
+                "Prom. autos/mes": (res["Unidades"] / res["Meses"]).map(lambda x: f"{x:.1f}"),
+            }),
+            use_container_width=True, hide_index=True,
+        )
+
+        with st.expander("📅 Ver detalle mes a mes"):
+            anio_sel = st.selectbox("Año", _anios, index=len(_anios) - 1, key="hist_anio")
+            hm = hist[hist["anio"] == anio_sel]
+            mens = (hm.groupby("mes")
+                      .agg(Unidades=("modelo", "size"),
+                           Utilidad=("util_neta_calc", "sum"),
+                           Ventas=("venta", "sum"))
+                      .reindex(range(1, 13)).fillna(0))
+            # el número al frente mantiene el orden cronológico en el eje del gráfico
+            mens.index = [f"{i:02d} {m[:3]}" for i, m in enumerate(MESES_ES, 1)]
+            st.bar_chart(mens[[_col]], color="#1d4ed8", height=280)
+            st.dataframe(
+                pd.DataFrame({
+                    "Mes":      MESES_ES,
+                    "Unidades": mens["Unidades"].astype(int),
+                    "Ventas":   mens["Ventas"].map(fmt_mxn),
+                    "Utilidad": mens["Utilidad"].map(fmt_mxn),
+                }),
+                use_container_width=True, hide_index=True,
+            )
+
+        with st.expander("🚙 Ver las unidades vendidas"):
+            anio_u = st.selectbox("Año", _anios, index=len(_anios) - 1, key="hist_anio_u")
+            hu = hist[hist["anio"] == anio_u].sort_values(["mes", "modelo"])
+            st.dataframe(
+                pd.DataFrame({
+                    "Mes":      hu["mes"].map(lambda m: MESES_ES[int(m) - 1]),
+                    "Unidad":   hu["modelo"].str.title(),
+                    "Modelo":   hu["anio_auto"].astype(int).astype(str),
+                    "Color":    hu["color"].str.title().replace("", "—"),
+                    "Costo":    hu["costo"].map(fmt_mxn),
+                    "Venta":    hu["venta"].map(fmt_mxn),
+                    "Utilidad": hu["util_neta_calc"].map(fmt_mxn),
+                }),
+                use_container_width=True, hide_index=True,
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
