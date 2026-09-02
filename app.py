@@ -50,6 +50,16 @@ def _c_historico_autos():
         return None
     return pd.read_csv(ruta)
 
+# Meses que realmente existen como hoja en el Excel. No se puede deducir del CSV
+# porque hay meses con hoja y cero ventas (marzo 2025), y sin esto el promedio
+# mensual sale inflado.
+@st.cache_data
+def _c_historico_meses():
+    ruta = Path(__file__).parent / "data" / "historico_autos_meses.csv"
+    if not ruta.exists():
+        return None
+    return pd.read_csv(ruta).set_index("anio")["meses_con_hoja"].to_dict()
+
 def _clear_cache():
     for fn in [_c_eventos, _c_rentas, _c_autos, _c_facturaciones,
                _c_historial, _c_cierres, _c_gastos, _c_patrimonio]:
@@ -1523,9 +1533,11 @@ if tab_sel == "🚗 Autos":
                    .agg(Unidades=("modelo", "size"),
                         Ventas=("venta", "sum"),
                         Costo=("costo", "sum"),
-                        Utilidad=("util_neta_calc", "sum"),
-                        Meses=("mes", "nunique"))
+                        Utilidad=("util_neta_calc", "sum"))
                    .reset_index())
+        _meses = _c_historico_meses() or {}
+        _con_venta = hist.groupby("anio")["mes"].nunique().to_dict()
+        res["Meses"] = res["anio"].map(lambda a: _meses.get(a) or _con_venta.get(a, 1))
         res["Ticket"] = res["Ventas"] / res["Unidades"]
         res["Margen"] = res["Utilidad"] / res["Ventas"] * 100
 
