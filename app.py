@@ -54,6 +54,13 @@ def _c_historico_autos():
 # porque hay meses con hoja y cero ventas (marzo 2025), y sin esto el promedio
 # mensual sale inflado.
 @st.cache_data
+def _c_historico_ingresos():
+    ruta = Path(__file__).parent / "data" / "ingresos_historico.csv"
+    if not ruta.exists():
+        return None
+    return pd.read_csv(ruta)
+
+@st.cache_data
 def _c_historico_meses():
     ruta = Path(__file__).parent / "data" / "historico_autos_meses.csv"
     if not ruta.exists():
@@ -1422,6 +1429,120 @@ if tab_sel == "🏠 Rentas":
         with k3: kpi("Atrasado", fmt_mxn(atrasadas), "Venció sin pago", "orange")
     else:
         st.info("No hay rentas registradas aún.")
+
+    # ── Histórico de otros ingresos (Excel AUTO FACIL 2020–2026) ──────────────
+    st.divider()
+    st.markdown("### 📈 Histórico de otros ingresos")
+
+    ing = _c_historico_ingresos()
+    if ing is None or ing.empty:
+        st.info("No se encontró `data/ingresos_historico.csv`.")
+    else:
+        _ai = sorted(ing["anio"].unique())
+        st.caption(
+            f"{len(ing)} registros de {_ai[0]} a {_ai[-1]}, tomados de los bloques de ingresos "
+            "del Excel AUTO FACIL. Solo aparecen los meses en que se anotaron: que un mes no "
+            "salga no quiere decir que no haya entrado renta, sino que no quedó escrita."
+        )
+
+        CATS = ["Casas", "Local", "Facturaciones", "Otros"]
+        _tot = {c: ing.loc[ing["categoria"] == c, "monto"].sum() for c in CATS}
+
+        g1, g2, g3, g4 = st.columns(4)
+        with g1: kpi("Casas", fmt_mxn(_tot["Casas"]),
+                     f"{ing[ing.categoria=='Casas']['detalle'].nunique()} propiedades", "purple")
+        with g2: kpi("Local", fmt_mxn(_tot["Local"]),
+                     f"{(ing.categoria=='Local').sum()} meses anotados", "blue")
+        with g3: kpi("Facturaciones", fmt_mxn(_tot["Facturaciones"]),
+                     f"{(ing.categoria=='Facturaciones').sum()} meses anotados", "green")
+        with g4: kpi("Otros ingresos", fmt_mxn(_tot["Otros"]),
+                     ", ".join(sorted(ing[ing.categoria=="Otros"]["detalle"].unique())[:3]), "orange")
+
+        # ── Comparativa anual por categoría ──────────────────────────────────
+        st.markdown("#### Por año")
+        piv = (ing.pivot_table(index="anio", columns="categoria", values="monto",
+                               aggfunc="sum", fill_value=0)
+                  .reindex(columns=CATS, fill_value=0))
+        piv.index = piv.index.astype(str)
+        st.bar_chart(piv, height=320,
+                     color=["#7c3aed", "#2563eb", "#16a34a", "#ea580c"])
+
+        st.dataframe(
+            pd.DataFrame({
+                "Año": piv.index,
+                **{c: piv[c].map(fmt_mxn) for c in CATS},
+                "Total": piv[CATS].sum(axis=1).map(fmt_mxn),
+            }),
+            use_container_width=True, hide_index=True,
+        )
+
+        # ── Comparativa de las casas, propiedad por propiedad ─────────────────
+        st.markdown("#### Comparativa de las casas")
+        casas = ing[ing["categoria"].isin(["Casas", "Local"])]
+        if casas.empty:
+            st.info("Sin registros de casas.")
+        else:
+            pc = (casas.pivot_table(index="anio", columns="detalle", values="monto",
+                                    aggfunc="sum", fill_value=0))
+            pc.index = pc.index.astype(str)
+            st.bar_chart(pc, height=300)
+
+            resu = (casas.groupby("detalle")
+                         .agg(Meses=("monto", "size"), Total=("monto", "sum"))
+                         .sort_values("Total", ascending=False).reset_index())
+            resu["Promedio mensual"] = resu["Total"] / resu["Meses"]
+            _ord = casas.assign(_p=casas["anio"] * 100 + casas["mes"])
+            _idx = _ord.groupby("detalle")["_p"].idxmin()
+            _primer = _ord.loc[_idx].set_index("detalle").apply(
+                lambda f: f"{MESES_ES[int(f['mes']) - 1][:3]} {int(f['anio'])}", axis=1)
+            st.dataframe(
+                pd.DataFrame({
+                    "Propiedad":        resu["detalle"],
+                    "Meses anotados":   resu["Meses"],
+                    "Total cobrado":    resu["Total"].map(fmt_mxn),
+                    "Promedio mensual": resu["Promedio mensual"].map(fmt_mxn),
+                    "Primer registro":  resu["detalle"].map(_primer),
+                }),
+                use_container_width=True, hide_index=True,
+            )
+            st.caption(
+                "El local va aparte del total de Casas, pero se incluye en esta comparativa "
+                "para verlo junto a las demás propiedades."
+            )
+
+        # ── Detalle mensual ───────────────────────────────────────────────────
+        with st.expander("📅 Ver mes a mes"):
+            anio_i = st.selectbox("Año", _ai, index=len(_ai) - 1, key="ing_anio")
+            im = ing[ing["anio"] == anio_i]
+            pm = (im.pivot_table(index="mes", columns="categoria", values="monto",
+                                 aggfunc="sum", fill_value=0)
+                    .reindex(range(1, 13), fill_value=0)
+                    .reindex(columns=CATS, fill_value=0))
+            pm.index = [f"{i:02d} {m[:3]}" for i, m in enumerate(MESES_ES, 1)]
+            st.bar_chart(pm, height=300,
+                         color=["#7c3aed", "#2563eb", "#16a34a", "#ea580c"])
+            st.dataframe(
+                pd.DataFrame({
+                    "Mes": MESES_ES,
+                    **{c: pm[c].map(fmt_mxn) for c in CATS},
+                    "Total": pm[CATS].sum(axis=1).map(fmt_mxn),
+                }),
+                use_container_width=True, hide_index=True,
+            )
+
+        with st.expander("🧾 Ver cada registro"):
+            det = ing.sort_values(["anio", "mes"], ascending=[False, False])
+            st.dataframe(
+                pd.DataFrame({
+                    "Año":       det["anio"].astype(str),
+                    "Mes":       det["mes"].map(lambda m: MESES_ES[int(m) - 1]),
+                    "Categoría": det["categoria"],
+                    "Detalle":   det["detalle"],
+                    "Monto":     det["monto"].map(fmt_mxn),
+                    "Como venía en el Excel": det["etiqueta"].str.title(),
+                }),
+                use_container_width=True, hide_index=True,
+            )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
