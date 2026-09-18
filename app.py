@@ -180,7 +180,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-PROPIEDADES = ["Casa San Carlos", "Casa Encinos 1", "Casa Encinos 3"]
+PROPIEDADES = ["Casa San Carlos", "Casa Encinos 1", "Casa Encinos 3", "Depa Encinos 1"]
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Identificación de usuario (persiste en sesión)
@@ -1291,6 +1291,7 @@ if tab_sel == "🏠 Rentas":
         "Casa San Carlos": "🏡",
         "Casa Encinos 1":  "🏠",
         "Casa Encinos 3":  "🏘️",
+        "Depa Encinos 1":  "🏢",
     }
 
     # Navegación de mes (compartida para las 3 casas)
@@ -1313,8 +1314,8 @@ if tab_sel == "🏠 Rentas":
             else:
                 st.session_state.rcal_mes += 1
 
-    # Mostrar 3 calendarios lado a lado
-    cols_cal = st.columns(3)
+    # Mostrar un calendario por propiedad, lado a lado
+    cols_cal = st.columns(len(PROPIEDADES))
     for idx, prop in enumerate(PROPIEDADES):
         rangos = [
             (r.get("fecha_inicio"), r["fecha_vencimiento"], r.get("notas",""))
@@ -1324,7 +1325,7 @@ if tab_sel == "🏠 Rentas":
             st.session_state.rcal_anio, st.session_state.rcal_mes, rangos, prop
         )
         with cols_cal[idx]:
-            st.markdown(f"**{ICONOS_PROP[prop]} {prop}**")
+            st.markdown(f"**{ICONOS_PROP.get(prop, '🏠')} {prop}**")
             st.markdown(html_cal, unsafe_allow_html=True)
             # Resumen rápido de esta propiedad
             rentas_prop = [r for r in todas_rentas if r["propiedad"] == prop]
